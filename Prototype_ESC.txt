@@ -1,0 +1,55 @@
+//Taylor Brown
+//10/14/2015
+//This program is to help prototype the ME EN 330 Final
+//project by outputting a certain PWM signal to an ESC
+//when a certain Pin is high and a certain PWM signal 
+//when that Pin is low.
+
+#include <p24F16KA301.h>
+
+_FOSCSEL(FNOSC_FRC);
+
+int main()
+{
+							//Configure Timer1
+	T1CONbits.TON = 1;		//Turn on Timer1 (See Sec. 12 of Data sheet)
+	T1CONbits.TCS = 0;		//Select internal instruction cycle clock(0),
+							//(Internal clock is F_osc/2), 4,000,000 Hz
+	T1CONbits.TCKPS = 0b01;	//Set timer pre-scale(8), 500,000 Hz
+	PR1 = 0x2710;			//Set timer (and PWM) period of (10000 counts) (50Hz)
+	TMR1 = 0;				//Reset Timer1 to zero
+
+
+								//Configure input pin
+	_ANSA0 = 0;				//Configures Pin 2 as digital
+	_TRISA0 = 1;				//Configures Pin 2 as an input
+	
+								//Configure output pin (OC2 is Pin 4)
+	OC2CON1bits.OCTSEL = 4;		//Select Timer1 as source using OCTSEL and SYNCSEL
+	OC2CON2bits.SYNCSEL = 11;
+    OC2CON2bits.OCTRIG = 0;		//Synchronizes OC2 with source designated by the SYNCSELx bits
+	OC2CON1bits.OCM = 6;		//Select edge-aligned mode using OCM
+	OC2R = 0x1F4;				//Select PWM duty cycle using OC2R register (3E8 = 1000, 1F4 = 500)
+								//500 counts is 1 ms, 1000 is 2 ms, period of PWM is 20 ms			
+								//duty cycle is 0.05 or 0.10. These are the ranges accepted by the 
+								//ESC. 1ms is off, 2ms is full on. Choose value in between for
+								//certain value.
+								
+	while(1)
+	{
+        
+	if(_RA0 == 0)				//If Pin 2 is low then set PWM to 1 ms duty cycle
+	{
+	OC2R = 0x1F4;
+	}
+	
+	if(_RA0 == 1)				//If Pin 2 is high then set PWM to 2ms duty cycle
+	{
+	OC2R = 0x3E8;
+	}
+	
+	}
+	
+	
+return 0;
+}
