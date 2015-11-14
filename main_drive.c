@@ -32,7 +32,7 @@
 
 #include <p24F16KA301.h>
 
-_FOSCSEL(FNOSC_FRC);        // Select 15 MHz Ocsillator
+_FOSCSEL(FNOSC_FRC);        // Select 15 MHz Oscillator
 
 //------------------------------------------------------------------------
 // A/D Configuration Function
@@ -44,12 +44,20 @@ void config_ad(void);
 
 int main()
 {
-    char state = 'initializing';
-	char destination = 'center';
-    char Left_dir = 'forward';
-    int L_trackspeed = 0;
-    char R_dir = 'forward';
-    int R_trackspeed = 0;
+    unsigned char state = 'initializing';
+	unsigned char destination = 'center';
+    unsigned char L_dir = 'forward';
+    int L_speed = 0;
+    unsigned char R_dir = 'for';
+    int R_speed = 0;
+    int max_speed = 20;
+    int IR_threshold = 10;
+    int last_L_IR = 0;
+    int last_R_IR = 0;
+    int new_L_IR = ADC1BUF10;
+    int new_R_IR = ADC1BUF9;
+    int L_IR = 0;
+    int R_IR = 0;
     
     while(1)
 	{
@@ -59,10 +67,10 @@ int main()
                 config_ad();
                 state = 'traveling';
                 destination = 'center';
-                Left_dir = 'forward';
-                L_trackspeed = 0;
+                L_dir = 'forward';
+                L_speed = 0;
                 R_dir = 'forward';
-                R_trackspeed = 0;
+                R_speed = 0;
                 
                 break;
                 
@@ -80,17 +88,35 @@ int main()
                 }
                 break;
                 
-            case 'locating ball dispenser':
+            case 'locating dispenser':
                 /* Pin 17: AN10 (Analog Input) <-- Input from Left Base IR Sensor
                  * Pin 18: AN9 (Analog Input) <-- Input from Right Base IR Sensor */
+                L_IR = (last_L_IR + new_L_IR)/2.0;
+                R_IR = (last_R_IR + new_R_IR)/2.0;
                 
+                if (L_IR < IR_threshold && R_IR < IR_threshold) // If LIR = RIR = 0 --> Rotate Clockwise Fast
+                {
+                    L_speed = max_speed;
+                    L_dir = 'forward';
+                    R_speed = max_speed;
+                    R_dir = 'reverse';
+                }
+                else if (R_IR > IR_threshold && R_IR - L_IR > IR_threshold) // If R_IR > L_IR --> Rotate Clockwise Slower
+                {
+                    L_speed = max_speed / 2;
+                    L_dir = 'forward';
+                    R_speed = max_speed / 2;
+                    R_dir = 'reverse';
+                }
+                last_L_IR = new_L_IR;
+                last_R_IR = new_R_IR;
                 break;
                 
             case 'collecting balls':
                 // do the things
                 break;
                 
-            case 'locating active goal':
+            case 'locating goal':
                 // do the things
                 break;
                         
