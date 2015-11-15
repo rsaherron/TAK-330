@@ -12,19 +12,19 @@
  * Pin 3:
  * Pin 4: OC2 --> Step PWM to Pololu ESC --> Left Track
  * Pin 5: OC3 --> Step PWM to Pololu ESC --> Right Track
- * Pin 6: RB2 (Digital Output) --> M0 on both Pololu ESC boards (Optional)
- * Pin 7: RA2 (Digital Output) --> M1 on both Pololu ESC boards (Optional)
- * Pin 8: AN13 (Analog Input) <-- Input from front RangeFinder 
- * Pin 9: AN14 (Analog Input) <-- Input from lateral RangeFinder
+ * Pin 6: _LATB2 (Digital Output) --> Dir on Left Track Pololu ESC Board
+ * Pin 7: _LATA2 (Digital Output) --> Dir on Right Track Pololu ESC Board
+ * Pin 8:  
+ * Pin 9: 
  * Pin 10: 
  * Pin 11:
  * Pin 12:
  * Pin 13:
- * Pin 14: OC1 --> 
- * Pin 15:
- * Pin 16:
- * Pin 17: AN10 (Analog Input) <-- Input from Left Base IR Sensor
- * Pin 18: AN9 (Analog Input) <-- Input from Right Base IR Sensor
+ * Pin 14: OC1 --> PWM (unused)
+ * Pin 15: AN12 RB12 (Analog Input) <-- Input from front RangeFinder
+ * Pin 16: AN11 RB13 (Analog Input) <-- Input from lateral RangeFinder
+ * Pin 17: AN10 RB14 (Analog Input) <-- Input from Left Base IR Sensor
+ * Pin 18: AN9 RB15 (Analog Input) <-- Input from Right Base IR Sensor
  * Pin 19: VSS
  * Pin 20: VDD
  * 
@@ -32,7 +32,9 @@
 
 #include <p24F16KA301.h>
 
-_FOSCSEL(FNOSC_FRC);        // Select 15 MHz Oscillator
+_FOSCSEL(FNOSC_FRC & SOSCSRC_DIG);        // Select 8 MHz Oscillator and enable pins 9 & 10 for IO
+_FOSC(OSCIOFNC_OFF);        //enable pin 8 for IO
+_FICD(ICS_PGx2);
 
 //------------------------------------------------------------------------
 // A/D Configuration Function
@@ -41,14 +43,16 @@ _FOSCSEL(FNOSC_FRC);        // Select 15 MHz Oscillator
 // conversion mode.
 //------------------------------------------------------------------------
 void config_ad(void);
+void config_PWM(void);
+void config_IO(void);
 
 int main()
 {
-    unsigned char state = 'initializing';
-	unsigned char destination = 'center';
-    unsigned char L_dir = 'forward';
+    int state = 1;
+	int destination = 1;
+    int L_dir = 1;
     int L_speed = 0;
-    unsigned char R_dir = 'for';
+    int R_dir = 1;
     int R_speed = 0;
     int max_speed = 20;
     int IR_threshold = 10;
@@ -63,32 +67,41 @@ int main()
 	{
         switch(state)
         {
-            case 'initializing':
+            // State 1: Initializing
+            case 1:
+                config_IO();
                 config_ad();
-                state = 'traveling';
-                destination = 'center';
-                L_dir = 'forward';
-                L_speed = 0;
-                R_dir = 'forward';
-                R_speed = 0;
+                config_PWM();
+                destination = 1;// Center
+                L_dir = 1;      // Forward
+                L_speed = 3125;
+                R_dir = 1;      // Forward
+                R_speed = 3125;
+                
+                state = 3;      // Go to State 2
                 
                 break;
                 
-            case 'traveling':
+            //State 2: Traveling    
+            case 2:     
                 switch(destination)
                 {
-                    case 'center':
+                    // Destination 1: Center
+                    case 1:
                         // travel to center
                         // when you get there, change the state
                         break;
-                    case 'ball dispenser':
+                        
+                    // Destination 2: Ball Dispenser    
+                    case 2:
                         // travel to ball dispenser
                         // when you get there, change the state
                         break;
                 }
                 break;
-                
-            case 'locating dispenser':
+            
+            // State 3: Locating Ball Dispenser
+            case 3:
                 /* Pin 17: AN10 (Analog Input) <-- Input from Left Base IR Sensor
                  * Pin 18: AN9 (Analog Input) <-- Input from Right Base IR Sensor */
                 L_IR = (last_L_IR + new_L_IR)/2.0;
@@ -97,47 +110,75 @@ int main()
                 if (L_IR < IR_threshold && R_IR < IR_threshold) // If LIR = RIR = 0 --> Rotate Clockwise Fast
                 {
                     L_speed = max_speed;
-                    L_dir = 'forward';
+                    L_dir = 1;      // Forward
                     R_speed = max_speed;
-                    R_dir = 'reverse';
+                    R_dir = 0;      // Reverse
                 }
                 else if (R_IR > IR_threshold && R_IR - L_IR > IR_threshold) // If R_IR > L_IR --> Rotate Clockwise Slower
                 {
                     L_speed = max_speed / 2;
-                    L_dir = 'forward';
+                    L_dir = 1;      // Forward
                     R_speed = max_speed / 2;
-                    R_dir = 'reverse';
+                    R_dir = 0;      // Reverse
                 }
-                last_L_IR = new_L_IR;
+                else if (L_IR > IR_threshold && L_IR - R_IR > IR_threshold)
+                {
+                    L_speed = max_speed / 2;
+                    L_dir = 0;      // Reverse
+                    R_speed = max_speed / 2;
+                    R_dir = 1;      // Forward
+                }
+                else if (L_IR > IR_threshold && R_IR > IR_threshold && abs(L_IR - R_IR) < IR_threshold ) // stop rotating when L_IR = R_IR > 0
+                {
+                    L_speed = 0;
+                    L_dir = 1;      // Forward
+                    R_speed = 0;
+                    R_dir = 1;      // Forward
+                }
+                
+                last_L_IR = new_L_IR; // Set the new_IR readings to the last_IR readings for the next loop
                 last_R_IR = new_R_IR;
                 break;
-                
-            case 'collecting balls':
+            
+            // State 4: Collecting Balls    
+            case 4:
+                // do the things
+                break;
+            
+            // State 5: Locating Goal    
+            case 5:
+                // do the things
+                break;
+            
+            // State 6: Shooting Balls    
+            case 6:
                 // do the things
                 break;
                 
-            case 'locating goal':
-                // do the things
-                break;
-                        
-            case 'shooting balls':
-                // do the things
-                break;
-                
-                      
+            break;        
         }
-//	if(_RA0 == 0)				//If Pin 2 is low then set PWM to 1 ms duty cycle
-//	{
-//	OC2R = 0x1F4;
-//	}
-//
-//	if(_RA0 == 1)				//If Pin 2 is high then set PWM to 2ms duty cycle
-//	{
-//	OC2R = 0x3E8;
-//	}
-
+        
+        // Set speed and direction of motors
+        PR1 = ADC1BUF10;
+        OC1RS = PR1;
+        OC1R = PR1/2.0;
+        PR2 = L_speed;
+        OC2RS = PR2;
+        OC2R = PR2/2.0;
+        PR3 = R_speed;
+        OC3RS = PR3;
+        OC3R = PR3/2.0;
+        
+        if(L_dir == 1)
+            _LATB2 = 1;
+        else
+            _LATB2 = 0;
+        if(R_dir == 1)
+            _LATA2 = 1;
+        else
+            _LATA2 = 0;
+        
 	}
-
 
 return 0;
 }
@@ -180,4 +221,69 @@ void config_ad(void)
     _ADRC = 0;          // AD1CON3<15> -- Use system clock
     _SAMC = 1;          // AD1CON3<12:8> -- Auto sample every A/D period TAD
     _ADCS = 0x3F;          // AD1CON3<7:0> -- A/D period TAD = 64*TCY
+}
+
+void config_PWM(void)
+{
+     // Configure Timer 1
+    _TON = 1;                   //enable Timer1
+    _TCS = 0;                   //Set source to internal clock
+    _TCKPS = 0b11;              //Select prescale value of 256:1 - Tick Period of 64 microseconds
+    PR1 = 2;                    //Set initial timer period to 128 microseconds
+    TMR1 = 0;                   //Set timer count to 0
+    // Configure Timer 2
+    T2CONbits.TON = 1;          //enable Timer2
+    T2CONbits.TCS = 0;          //Set source to internal clock
+    T2CONbits.TCKPS = 0b11;     //Select prescale value of 256:1 - Tick Period of 64 microseconds
+    PR2 = 2;                    //Set initial timer period to 128 microseconds
+    TMR2 = 0;                   //Set timer count to 0
+    // Configure Time 3
+    T3CONbits.TON = 1;          //enable Timer2
+    T3CONbits.TCS = 0;          //Set source to internal clock
+    T3CONbits.TCKPS = 0b11;     //Select prescale value of 256:1 - Tick Period of 64 microseconds
+    PR3 = 2;                    //Set initial timer period to 128 microseconds
+    TMR3 = 0;                   //Set timer count to 0
+
+  // PWM Period = [Value + 1] x TCY x (Prescaler Value) //
+
+  // Configure Output Compare 1
+    OC1CON1bits.OCTSEL = 0b100;     //Select Timer1 to be timer source
+    OC1CON1bits.OCM = 0b110;        //Select Edge-Aligned PWM mode
+    OC1CON2bits.SYNCSEL = 0b01011;  //Select current OCx as synchronization source
+    OC1RS = PR1/2;                  //Set duty cycle to 1/2 period
+  // Configure Output Compare 2 (Left track)
+    OC2CON1bits.OCTSEL = 0b000;     //Select Timer2 to be timer source
+    OC2CON1bits.OCM = 0b110;        //Select Edge-Aligned PWM mode
+    OC2CON2bits.SYNCSEL = 0b01100;  //Select Timer2 as synchronization source
+    OC2RS = PR2/2;                  //Set duty cycle to 1/2 period
+  // Configure Output Compare 3 (Left track)
+    OC3CON1bits.OCTSEL = 0b001;     //Select Timer3 to be timer source
+    OC3CON1bits.OCM = 0b110;        //Select Edge-Aligned PWM mode
+    OC3CON2bits.SYNCSEL = 0b01101;  //Select Timer3 as synchronization source
+    OC3RS = PR3/2;                  //Set duty cycle to 1/2 period
+}
+
+void config_IO(void)
+{
+ /* Pin 15: AN12 RB12 (Analog Input) <-- Input from front RangeFinder
+ * Pin 16: AN11 RB13 (Analog Input) <-- Input from lateral RangeFinder
+ * Pin 17: AN10 RB14 (Analog Input) <-- Input from Left Base IR Sensor
+ * Pin 18: AN9 RB15 (Analog Input) <-- Input from Right Base IR Sensor*/
+    // Configure the digital I/O ports
+    TRISA = 0;          //Set A ports to output
+    TRISB = 0;          //Set B ports to output
+    ANSA = 0;           //disables Port A analog input
+    ANSB = 0;           //disables Port B analog input
+    
+    //Set Analog in puts to input
+    _TRISB12 = 1;
+    _TRISB13 = 1;
+    _TRISB14 = 1;
+    _TRISB15 = 1;
+    
+    //Enable Analog in read from analog in pins
+    _ANSB12 = 1;
+    _ANSB13 = 1;
+    _ANSB14 = 1;
+    _ANSB15 = 1;
 }
