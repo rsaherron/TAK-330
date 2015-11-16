@@ -1,0 +1,106 @@
+// This program reads from an A/D channel in auto mode.
+
+#include <p24F16KA301.h>
+
+// Select oscillator
+_FOSCSEL(FNOSC_FRC);
+
+// This function configures the A/D to read from both PORTA and PORTB
+void config_ad(void)
+{
+    // AD1CHS register
+    _CH0NA = 0;         // AD1CHS<7:5> -- Use VDD as negative input
+    _CH0SA = 0b01100;         // AD1CHS<4:0> -- Use AN(X) as positive input
+    _CH0SB = 0b01011;  
+
+    // AD1CON1 register
+    _ADON = 1;          // AD1CON1<15> -- Turn on A/D
+    _ADSIDL = 0;        // AD1CON1<13> -- A/D continues while in idle mode
+    _MODE12 = 1;        // AD1CON1<10> -- 12-bit A/D operation
+    _FORM = 00;          // AD1CON1<9:8> -- Unsigned integer output
+    _SSRC = 7;          // AD1CON1<7:4> -- Auto conversion (internal counter)
+    _ASAM = 1;          // AD1CON1<2> -- Auto sampling
+
+    // AD1CSSL register
+   // AD1CSSL = 1;        // AD1CSSL<15:0> -- Select lower channels to scan
+   // AD1CSSH = 1;        // AD1CSSH<15:0> -- Select upper channels to scan
+
+    AD1CSSL = 0;        // AD1CSSL<15:0> -- Skip all channels on input scan --
+                        // see the CSCNA bits in AD1CON2
+
+    // AD1CON2 register
+    _BUFREGEN = 1;
+    _SMPI = 1;
+    _PVCFG = 0;         // AD1CON2<15:14> -- Use VDD as positive ref voltage
+    _NVCFG = 0;         // AD1CON2<13> -- Use VSS as negative ref voltage
+    _CSCNA = 0;         // AD1CON2<10> -- Does not scan inputs specified in
+                        // AD1CSSx registers (instead uses channels specified
+                        // by CH0SA bits in AD1CHS register) -- Selecting '0'
+                        // here probably makes writing to the AD1CSSL register
+                        // unnecessary.
+    _ALTS = 1;          // AD1CON2<0> -- Sample both MUXA+MUXB
+
+    // AD1CON3 register
+    _ADRC = 0;          // AD1CON3<15> -- Use system clock
+    _SAMC = 1;          // AD1CON3<12:8> -- Auto sample every A/D period TAD
+    _ADCS = 0x3F;       // AD1CON3<7:0> -- A/D period TAD = 64*TCY
+}
+
+int main()
+{
+
+    // Configure pins
+    // CONFIGURE I/O pins here
+	
+			
+    _TRISB12 = 1;				//_OC1 is pin 1
+    _TRISB13 = 1;				//RB12 is Pin15, RB13 is Pin16
+    _ANSB12 = 1; 
+    _ANSB13 = 1;
+
+    //ANSA = 0;					//Configure Port A bits as digital 
+    //ANSB = 0;					//Configure Port B bits as digital
+
+    // Configure A/D
+    config_ad();
+
+    T1CONbits.TON = 1;		//Turn on Timer1 (See Sec. 12 of Datasheet)
+	T1CONbits.TCS = 0;		//Select internal instruction cycle clock(0), (Internal clock is Fosc/2)
+	T1CONbits.TCKPS = 0b1;	//Set timer prescale(1)
+	PR1 = 0x3E8;			//Set timer period of 1kHz (4000 counts)
+	TMR1 = 0;				//Reset Timer1 to zero
+
+						//Configure PWM1 on OC1
+	OC1CON1bits.OCTSEL = 4;			//Select Timer1 as source using OCTSEL and SYNCSEL
+	OC1CON2bits.SYNCSEL = 11;
+    OC1CON2bits.OCTRIG = 0;
+	OC1CON1bits.OCM = 6;				//Select edge-aligned mode using OCM
+    
+    
+    OC2CON1bits.OCTSEL = 4;			//Select Timer1 as source using OCTSEL and SYNCSEL
+	OC2CON2bits.SYNCSEL = 11;
+    OC2CON2bits.OCTRIG = 0;
+	OC2CON1bits.OCM = 6;	
+							
+						//Select important timing values
+	PR1 = 0x3E8;			//Select PWM period (1000)
+	OC1R = 0x1F4;			//Select PWM duty cycle using OC1R register
+    
+    
+    // Loop
+    while(1)
+    {
+        // Read from the A/D buffer and do something useful with it. The A/D
+        // buffer is being updated continuously behind the scenes.
+        // WRITE CODE TO DO SOMETHING INTERESTING WITH THE VALUE IN THE
+        // A/D BUFFER HERE (ADC1BUF1)(12-bit number)
+        double i, j;
+        i = ADC1BUF12;
+        OC1R = (i/4095)*PR1;
+        
+        j = ADC1BUF11;
+        OC2R = (j/4095)*PR1;			//Select duty cycle
+    }
+
+    return 0;
+}
