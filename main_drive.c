@@ -55,7 +55,7 @@ int main()
     int L_speed = 0;
     int R_dir = 1;
     int R_speed = 0;
-    int max_speed = 20;
+    int max_speed = 40;
     int IR_threshold = 10;
     int last_L_IR = 0;
     int last_R_IR = 0;
@@ -79,7 +79,7 @@ int main()
                 R_dir = 1;      // Forward
                 R_speed = 3125;
                 
-                state = 3;      // Go to State 2
+                state = 7;      // Go to State 3
                 
                 break;
                 
@@ -156,7 +156,15 @@ int main()
                 // do the things
                 break;
                 
-            break;        
+            break;
+            
+            // test drive state
+            case 7:
+                L_dir = 1;      // Forward
+                L_speed = 30;
+                R_dir = 1;      // Forward
+                R_speed = 30;
+                break;
         }
         
         // Set speed and direction of motors
@@ -175,9 +183,9 @@ int main()
         else
             _LATB2 = 0;
         if(R_dir == 1)
-            _LATA2 = 1;
-        else
             _LATA2 = 0;
+        else
+            _LATA2 = 1;
         
 	}
 
