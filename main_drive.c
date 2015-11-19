@@ -31,6 +31,7 @@
  */
 
 #include <p24F16KA301.h>
+#include <stdlib.h>
 
 _FOSCSEL(FNOSC_FRC & SOSCSRC_DIG);        // Select 8 MHz Oscillator and enable pins 9 & 10 for IO
 _FOSC(OSCIOFNC_OFF);        //enable pin 8 for IO
@@ -198,12 +199,13 @@ void config_ad(void)
     _ASAM = 1;          // AD1CON1<2> -- Auto sampling
 
     // AD1CSSL registers
-    AD1CSSL = 0;        // AD1CSSL<15:0> -- Select lower channels to scan
-    AD1CSSH = 0;        // AD1CSSH<15:0> -- Select upper channels to scan
-    _CSS1 = 1;
-    _CSS15 = 1;
-
-
+    AD1CSSL = 0;        // AD1CSSL<15:0> -- clear lower channels to scan
+    AD1CSSH = 0;        // AD1CSSH<15:0> -- clear upper channels to scan
+    _CSS9 = 1;          // A/D scan AN9
+    _CSS10 = 1;         // AN10
+    _CSS11 = 1;         // AN11
+    _CSS12 = 1;         // AN12
+    
     // AD1CON2 register
     _PVCFG = 0;         // AD1CON2<15:14> -- Use VDD as positive ref voltage
     _NVCFG = 0;         // AD1CON2<13> -- Use VSS as negative ref voltage
@@ -275,7 +277,7 @@ void config_IO(void)
     ANSA = 0;           //disables Port A analog input
     ANSB = 0;           //disables Port B analog input
     
-    //Set Analog in puts to input
+    //Set Analog in pin to input mode
     _TRISB12 = 1;
     _TRISB13 = 1;
     _TRISB14 = 1;
