@@ -87,7 +87,8 @@ int main()
     float F_range = 1000;      // average of new and last IR readings
     float L_range = 1000;      // average of new and last IR readings
     float range_DIFF = 0.003;   // uncertainty in rangefinder
-    int center_tavel_state = 0;    
+    float center2corner = 0.6*0.707;
+    int center_travel_state = 0;    
     int game_timer = 0;     // running total of game time elapsed
     
     
@@ -105,7 +106,7 @@ int main()
                 R_dir = 1;      // Forward
                 track_speed = 3125;
 
-                state = 2;
+                state = 7;
                 
                 break;
                 
@@ -115,7 +116,7 @@ int main()
                 {
                     // Destination 1: Center
                     case 1:
-                        switch(center_tavel_state)
+                        switch(center_travel_state)
                         {
                             // State 0: orienting perpendicular to nearest walls
                             case 0:
@@ -130,7 +131,7 @@ int main()
                                     track_speed = max_speed * 2;
                                     if(abs(last_F_range - F_range) < range_DIFF)
                                     {
-                                        center_tavel_state = 1;
+                                        center_travel_state = 1;
                                         track_speed = 0;
                                     }
                                     else if (last_F_range < F_range)
@@ -145,7 +146,7 @@ int main()
                             case 1:
                                 if(abs(F_range - L_range) < range_DIFF) // adjust these for center of rotation!!!
                                 {
-                                    center_tavel_state = 2;
+                                    center_travel_state = 2;
                                     track_speed = max_speed*2;
                                     L_dir = 1;
                                     R_dir = 0;
@@ -164,9 +165,20 @@ int main()
                                 }
                                 break;
                                 
-                            // State 2: Turn 45 degrees
+                            // State 2: Turn 45 degrees to face corner
                             case 2:
-                                //do the things
+                                if(abs(last_F_range - F_range) < range_DIFF)
+                                {
+                                    center_travel_state = 3;
+                                    track_speed = max_speed * 2;
+                                    R_dir = 0;
+                                    L_dir = 0;
+                                }
+                                else if (last_F_range < F_range)
+                                {
+                                    R_dir = ~R_dir;
+                                    L_dir = ~L_dir;
+                                }
                                 break;
                                 
                         }
@@ -236,9 +248,10 @@ int main()
             // test drive state
             case 7:
                 L_dir = 1;      // Forward
-                track_speed = 50;
+                track_speed = F_range;
                 R_dir = 1;      // Forward
                 break;
+                
         }
         
         // Handle Range Finders and Game Timer
@@ -285,8 +298,26 @@ int main()
             }
             last_L_echo_state = new_L_echo_state;
         }
-
-        }
+        
+        // Set speed and direction of motors
+//        PR1 = ADC1BUF10;
+//        OC1RS = PR1;
+//        OC1R = PR1/2.0;
+        PR2 = track_speed;
+        OC2RS = PR2;
+        OC2R = PR2/2.0;
+//        PR3 = track_speed;
+//        OC3RS = PR3;
+//        OC3R = PR3/2.0;
+        if(L_dir == 1)
+            _LATB2 = 1;
+        else
+            _LATB2 = 0;
+        if(R_dir == 1)
+            _LATA2 = 0;
+        else
+            _LATA2 = 1;
+    }
 
 return 0;
 }
