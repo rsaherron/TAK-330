@@ -6,28 +6,32 @@
  * Description: Code to be loaded on the main drive PIC24 microcontroller to
  * control the navigation of the Supple Shooter
  * 
- * Base PIC24 PinOut Inventory:
+ * --- Base PIC24 Resources ---
  * Pin 1: Master/Clear
  * Pin 2:
  * Pin 3:
- * Pin 4: OC2 --> Step PWM to Pololu ESC --> Left Track
- * Pin 5: OC3 --> Step PWM to Pololu ESC --> Right Track
+ * Pin 4: OC2 --> Step PWM to Pololu ESC's --> Left and Right Tracks
+ * Pin 5: OC3 --> PWM (currently unused)
  * Pin 6: _LATB2 (Digital Output) --> Dir on Left Track Pololu ESC Board
  * Pin 7: _LATA2 (Digital Output) --> Dir on Right Track Pololu ESC Board
- * Pin 8:  
- * Pin 9: 
+ * Pin 8: _LATA3 (Digital Output) --> Trig on Front Range Finder
+ * Pin 9: _LATB4 (Digital Output) --> Trig on Lateral Range Finder
  * Pin 10: 
  * Pin 11:
  * Pin 12:
  * Pin 13:
  * Pin 14: OC1 --> PWM (unused)
- * Pin 15: AN12 RB12 (Analog Input) <-- Input from front RangeFinder
- * Pin 16: AN11 RB13 (Analog Input) <-- Input from lateral RangeFinder
+ * Pin 15: RB12 (Digital Input) <-- Echo from front RangeFinder
+ * Pin 16: RB13 (Digital Input) <-- Echo from lateral RangeFinder
  * Pin 17: AN10 RB14 (Analog Input) <-- Input from Left Base IR Sensor
  * Pin 18: AN9 RB15 (Analog Input) <-- Input from Right Base IR Sensor
  * Pin 19: VSS
  * Pin 20: VDD
- * 
+ * Timer 1: OC1 PWM
+ * Timer 2: OC2 PWM
+ * Timer 3: OC3 PWM
+ * Timer 4: Range Finders Period/ Game Timer
+ * Timer 5: Range Finder Triggers/Echos
  */
 
 #include <p24F16KA301.h>
@@ -46,26 +50,49 @@ _FICD(ICS_PGx2);
 void config_ad(void);
 void config_PWM(void);
 void config_IO(void);
+void _ISR _T4Interrupt(void);
+void _ISR _T5Interrupt(void);
+int RF_state = 0;
+int RF_trigger_state = 0;   // used in RF Interrupt Service Routine
+
+
 
 int main()
 {
-    int state = 1;
-	int destination = 1;
-    int L_dir = 1;
-    int L_speed = 0;
-    int R_dir = 1;
-    int R_speed = 0;
-    int max_speed = 40;
-    int IR_threshold = 10;
-    int last_L_IR = 0;
-    int last_R_IR = 0;
-    int new_L_IR = ADC1BUF10;
-    int new_R_IR = ADC1BUF9;
-    int L_IR = 0;
-    int R_IR = 0;
+    int state = 1;          // Main State of the robot
+	int destination = 1;    // sub-state for traveling state
+    int L_dir = 1;          // Left track direction (1=forward, 0=backward)
+    int R_dir = 0;          // Right track direction (1=forward, 0=backward)
+    int track_speed = 40;    // PWM period of STEP pulses to track pololu boards
+    int max_speed = 40;     // constant for minimum value of track_speed
+    int IR_LOW = 1500;      // min (ambient) analog IR reading
+    int IR_DIFF = 15;       // minimum difference between Left_IR and Right_IR
+    int last_L_IR = ADC1BUF10;  // pervious reading of new_L_IR
+    int last_R_IR = ADC1BUF9;   // pervious reading of new_R_IR
+    int new_L_IR = ADC1BUF10;   // new reading from left analog IR sensor on base
+    int new_R_IR = ADC1BUF9;    // new reading from right analog IR sensor on base
+    float L_IR = 0;         // average of new and last IR readings
+    float R_IR = 0;         // average of new and last IR readings
+    int last_F_echo_state = _RB12;    // last value of Front RF echo input
+    int last_L_echo_state = _RB13;
+    int new_F_echo_state = _RB12;   // read state of RB12
+    int new_L_echo_state = _RB13;   // read state of RB13
+    int F_count = 0;        // count on TMR5
+    int L_count = 0;        // count on TMR5
+    float count2range = 3.342e-4;   // convert 2 microsecond counts to meters
+    int last_F_range = 0;   // pervious reading of new_F_range
+    int last_L_range = 0;   // pervious reading of new_L_range
+    int new_F_range = 0;    // new reading from front analog range finder
+    int new_L_range = 0;    // new reading from lateral analog range finder
+    float F_range = 1000;      // average of new and last IR readings
+    float L_range = 1000;      // average of new and last IR readings
+    float range_DIFF = 0.003;   // uncertainty in rangefinder
+    int center_tavel_state = 0;    
+    int game_timer = 0;     // running total of game time elapsed
+    
     
     while(1)
-	{
+    {
         switch(state)
         {
             // State 1: Initializing
@@ -75,22 +102,74 @@ int main()
                 config_PWM();
                 destination = 1;// Center
                 L_dir = 1;      // Forward
-                L_speed = 3125;
                 R_dir = 1;      // Forward
-                R_speed = 3125;
-                
-                state = 7;      // Go to State 3
+                track_speed = 3125;
+
+                state = 2;
                 
                 break;
                 
             //State 2: Traveling    
-            case 2:     
+            case 2:
                 switch(destination)
                 {
                     // Destination 1: Center
                     case 1:
-                        // travel to center
-                        // when you get there, change the state
+                        switch(center_tavel_state)
+                        {
+                            // State 0: orienting perpendicular to nearest walls
+                            case 0:
+                                if(F_range > 0.6 || L_range > 0.6)
+                                {
+                                    R_dir = 0;
+                                    L_dir = 1;
+                                    track_speed = max_speed;
+                                }
+                                else if(F_range <= 0.6 && L_range <= 0.6)
+                                {
+                                    track_speed = max_speed * 2;
+                                    if(abs(last_F_range - F_range) < range_DIFF)
+                                    {
+                                        center_tavel_state = 1;
+                                        track_speed = 0;
+                                    }
+                                    else if (last_F_range < F_range)
+                                    {
+                                        L_dir = ~L_dir;
+                                        R_dir = ~R_dir;
+                                    }
+                                }
+                                break;
+                                
+                            // State 1: drive forward or backward until adjusted F_RF == adjusted L_RF
+                            case 1:
+                                if(abs(F_range - L_range) < range_DIFF) // adjust these for center of rotation!!!
+                                {
+                                    center_tavel_state = 2;
+                                    track_speed = max_speed*2;
+                                    L_dir = 1;
+                                    R_dir = 0;
+                                }
+                                else if(F_range > L_range)      // adjust these for center of rotation!!!
+                                {
+                                    L_dir = 1;
+                                    R_dir = 1;
+                                    track_speed = max_speed*2;
+                                }
+                                else
+                                {
+                                    L_dir = 0;
+                                    R_dir = 0;
+                                    track_speed = max_speed*2;
+                                }
+                                break;
+                                
+                            // State 2: Turn 45 degrees
+                            case 2:
+                                //do the things
+                                break;
+                                
+                        }
                         break;
                         
                     // Destination 2: Ball Dispenser    
@@ -103,42 +182,38 @@ int main()
             
             // State 3: Locating Ball Dispenser
             case 3:
-                /* Pin 17: AN10 (Analog Input) <-- Input from Left Base IR Sensor
-                 * Pin 18: AN9 (Analog Input) <-- Input from Right Base IR Sensor */
-                L_IR = (last_L_IR + new_L_IR)/2.0;
-                R_IR = (last_R_IR + new_R_IR)/2.0;
-                
-                if (L_IR < IR_threshold && R_IR < IR_threshold) // If LIR = RIR = 0 --> Rotate Clockwise Fast
-                {
-                    L_speed = max_speed;
-                    L_dir = 1;      // Forward
-                    R_speed = max_speed;
-                    R_dir = 0;      // Reverse
-                }
-                else if (R_IR > IR_threshold && R_IR - L_IR > IR_threshold) // If R_IR > L_IR --> Rotate Clockwise Slower
-                {
-                    L_speed = max_speed / 2;
-                    L_dir = 1;      // Forward
-                    R_speed = max_speed / 2;
-                    R_dir = 0;      // Reverse
-                }
-                else if (L_IR > IR_threshold && L_IR - R_IR > IR_threshold)
-                {
-                    L_speed = max_speed / 2;
-                    L_dir = 0;      // Reverse
-                    R_speed = max_speed / 2;
-                    R_dir = 1;      // Forward
-                }
-                else if (L_IR > IR_threshold && R_IR > IR_threshold && abs(L_IR - R_IR) < IR_threshold ) // stop rotating when L_IR = R_IR > 0
-                {
-                    L_speed = 0;
-                    L_dir = 1;      // Forward
-                    R_speed = 0;
-                    R_dir = 1;      // Forward
-                }
-                
-                last_L_IR = new_L_IR; // Set the new_IR readings to the last_IR readings for the next loop
+                new_L_IR = ADC1BUF10;       // Pin 17: AN10 (Analog Input) <-- Input from Left Base IR Sensor
+                new_R_IR = ADC1BUF9;        // Pin 18: AN9 (Analog Input) <-- Input from Right Base IR Sensor
+                L_IR = (last_L_IR + new_L_IR)/2.0;      // Slight Digital Average Filtering
+                R_IR = (last_R_IR + new_R_IR)/2.0;      // Slight Digital Average Filtering
+                last_L_IR = new_L_IR;       // Set the new_IR readings to the last_IR readings for the next loop
                 last_R_IR = new_R_IR;
+                
+                if (L_IR < IR_LOW && R_IR < IR_LOW) // If LIR = RIR = 0 --> Rotate Clockwise Fast
+                {
+                    track_speed = max_speed;
+                    L_dir = 1;      // Forward
+                    R_dir = 0;      // Reverse
+                }
+                else if (R_IR > IR_LOW && R_IR - L_IR > IR_DIFF) // If R_IR > L_IR --> Rotate Clockwise Slower
+                {
+                    track_speed = max_speed / 2;
+                    L_dir = 1;      // Forward
+                    R_dir = 0;      // Reverse
+                }
+                else if (L_IR > IR_LOW && L_IR - R_IR > IR_DIFF)
+                {
+                    track_speed = max_speed / 2;
+                    L_dir = 0;      // Reverse
+                    R_dir = 1;      // Forward
+                }
+                else if (L_IR > IR_LOW && R_IR > IR_LOW && abs(L_IR - R_IR) < IR_DIFF ) // stop rotating when L_IR = R_IR > 0
+                {
+                    track_speed = 0;
+                    L_dir = 1;      // Forward
+                    R_dir = 1;      // Forward
+                }
+                
                 break;
             
             // State 4: Collecting Balls    
@@ -161,33 +236,57 @@ int main()
             // test drive state
             case 7:
                 L_dir = 1;      // Forward
-                L_speed = 30;
+                track_speed = 50;
                 R_dir = 1;      // Forward
-                R_speed = 30;
                 break;
         }
         
-        // Set speed and direction of motors
-        PR1 = ADC1BUF10;
-        OC1RS = PR1;
-        OC1R = PR1/2.0;
-        PR2 = L_speed;
-        OC2RS = PR2;
-        OC2R = PR2/2.0;
-        PR3 = R_speed;
-        OC3RS = PR3;
-        OC3R = PR3/2.0;
-        
-        if(L_dir == 1)
-            _LATB2 = 1;
-        else
-            _LATB2 = 0;
-        if(R_dir == 1)
-            _LATA2 = 0;
-        else
-            _LATA2 = 1;
-        
-	}
+        // Handle Range Finders and Game Timer
+        /* Pin 8: _LATA3 (Digital Output) --> Trig on Front Range Finder
+         * Pin 9: _LATB4 (Digital Output) --> Trig on Lateral Range Finder
+         * Pin 15: RB12 (Digital Input) <-- Echo from front RangeFinder
+         * Pin 16: RB13 (Digital Input) <-- Echo from lateral RangeFinder
+         * Timer 4 (TMR4) has a tick of 2 microseconds and period of 0.1 second
+         * Timer 5 (TMR5) does all kinds of crazy things
+         * RF_trigger_state determines what Timer 5 is doing
+         * Trig pulses should be 10 microseconds long (5 ticks)
+         * Distance = V*T/2; where V is the speed of sound (343.2m/s) and T is the Echo pulse length
+         */ 
+        if(RF_trigger_state == 2) // Handle Front RF
+        {
+            new_F_echo_state = _RB12;
+            if(new_F_echo_state != last_F_echo_state)
+            {
+                if(last_F_echo_state == 0)
+                    F_count = TMR5;
+                else
+                {
+                    last_F_range = F_range;
+                    new_F_range = (TMR5 - F_count)*count2range;
+                    F_range = (last_F_range + new_F_range)/2.0;     // digital signal averaging
+                }
+            }
+            last_F_echo_state = new_F_echo_state;
+        }
+
+        if(RF_trigger_state == 5) // Handle Lateral RF
+        {
+            new_L_echo_state = _RB13;
+            if(new_L_echo_state != last_L_echo_state)
+            {
+                if(last_L_echo_state == 0)
+                    L_count = TMR5;
+                else
+                {
+                    last_L_range = L_range;
+                    new_L_range = (TMR5 - L_count)*count2range;
+                    L_range = (L_range + new_L_range)/2.0;     // digital signal averaging
+                }
+            }
+            last_L_echo_state = new_L_echo_state;
+        }
+
+        }
 
 return 0;
 }
@@ -247,26 +346,47 @@ void config_PWM(void)
     T2CONbits.TCKPS = 0b11;     //Select prescale value of 256:1 - Tick Period of 64 microseconds
     PR2 = 2;                    //Set initial timer period to 128 microseconds
     TMR2 = 0;                   //Set timer count to 0
-    // Configure Time 3
-    T3CONbits.TON = 1;          //enable Timer2
+    // Configure Timer 3
+    T3CONbits.TON = 1;          //enable Timer3
     T3CONbits.TCS = 0;          //Set source to internal clock
     T3CONbits.TCKPS = 0b11;     //Select prescale value of 256:1 - Tick Period of 64 microseconds
     PR3 = 2;                    //Set initial timer period to 128 microseconds
     TMR3 = 0;                   //Set timer count to 0
+    // Configure Timer 4
+    T4CONbits.TON = 1;
+    T4CONbits.TCS = 0;          //Set source to internal clock
+    T4CONbits.TCKPS = 0b01;     //Select prescale value of 8:1 - Tick Period of 2 microseconds
+    PR4 = 50000;                //Set timer period to 0.1 seconds (enough for both range finder to fire and receive their signal)
+    TMR4 = 0;                   //Set timer count to 0
+    // Configure Timer4 interrupt 
+    _T4IP = 4;                  // Select interrupt priority 
+    _T4IE = 1;                  // Enable interrupt 
+    _T4IF = 0;                  // Clear interrupt flag 
+    // Configure Timer 5
+    T5CONbits.TON = 1;
+    T5CONbits.TCS = 0;          //Set source to internal clock
+    T5CONbits.TCKPS = 0b01;     //Select prescale value of 8:1 - Tick Period of 2 microseconds
+    PR5 = 50000;                //Set initial timer period to 0.1 seconds
+    TMR5 = 0;                   //Set timer count to 0
+    // Configure Timer5 interrupt 
+    _T5IP = 5;                  // Select interrupt priority 
+    _T5IE = 1;                  // Enable interrupt 
+    _T5IF = 0;                  // Clear interrupt flag 
+
 
   // PWM Period = [Value + 1] x TCY x (Prescaler Value) //
 
   // Configure Output Compare 1
     OC1CON1bits.OCTSEL = 0b100;     //Select Timer1 to be timer source
     OC1CON1bits.OCM = 0b110;        //Select Edge-Aligned PWM mode
-    OC1CON2bits.SYNCSEL = 0b01011;  //Select current OCx as synchronization source
+    OC1CON2bits.SYNCSEL = 0b01011;  //Select Timer1 as synchronization source
     OC1RS = PR1/2;                  //Set duty cycle to 1/2 period
-  // Configure Output Compare 2 (Left track)
+  // Configure Output Compare 2
     OC2CON1bits.OCTSEL = 0b000;     //Select Timer2 to be timer source
     OC2CON1bits.OCM = 0b110;        //Select Edge-Aligned PWM mode
     OC2CON2bits.SYNCSEL = 0b01100;  //Select Timer2 as synchronization source
     OC2RS = PR2/2;                  //Set duty cycle to 1/2 period
-  // Configure Output Compare 3 (Left track)
+  // Configure Output Compare 3
     OC3CON1bits.OCTSEL = 0b001;     //Select Timer3 to be timer source
     OC3CON1bits.OCM = 0b110;        //Select Edge-Aligned PWM mode
     OC3CON2bits.SYNCSEL = 0b01101;  //Select Timer3 as synchronization source
@@ -297,3 +417,75 @@ void config_IO(void)
     _ANSB14 = 1;
     _ANSB15 = 1;
 }
+
+void _ISR _T4Interrupt(void)
+{
+    _T4IF = 0;      // Clear interrupt flag
+    switch(RF_state)
+    {
+        // State 0: Reading Front RF
+        case 0:
+            RF_trigger_state = 3;
+            PR5 = 5;
+            _T5IF = 1;
+            RF_state = 1;
+            break;
+            
+        // State 1: Reading Lateral RF
+        case 1:
+            RF_trigger_state = 0;
+            PR5 = 5;
+            _T5IF = 1;
+            RF_state = 0;
+            break;
+    }
+}
+
+void _ISR _T5Interrupt(void) 
+{ 
+    _T5IF = 0;      // Clear interrupt flag 
+    switch(RF_trigger_state)
+    {
+        // State 0: time to raise Front RF_trigger
+        case 0:
+            PR5 = 5;        // 10 microsecond pulse
+            _LATA3 = 1;
+            RF_trigger_state = 1;
+            TMR5 = 0;
+            break;
+
+        // State 1: time to drop Front RF_trigger and listen for Front RF echo
+        case 1:
+            PR5 = 50000;
+            _LATA3 = 0;
+            RF_trigger_state = 2;
+            TMR5 = 0;
+            break;
+
+        // State 2: listening for Front RF echo
+        case 2:
+            // This isn't supposed to ever interrupt here. If it does, just go to state 3
+            RF_trigger_state = 3;
+            break;
+        // State 3: time to raise Lateral RF_trigger   
+        case 3:
+            PR5 = 5;        // 10 microsecond pulse
+            _LATB4 = 1;
+            RF_trigger_state = 4;
+            TMR5 = 0;
+            break;
+
+        // State 4: time to drop Lateral RF_trigger and listen for Lateral RF echo
+        case 4:
+            PR5 = 50000;
+            _LATB4 = 0;
+            RF_trigger_state = 5;
+            TMR5 = 0;
+            break;
+        // state 5: listening for lateral RF echo
+        case 5:
+            // This isn't ever supposed to interrupt here. If it does, just go to state 0
+            RF_trigger_state = 0;
+            break;
+    }
+} 
