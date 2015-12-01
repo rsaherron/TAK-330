@@ -54,7 +54,7 @@ void _ISR _T4Interrupt(void);
 void _ISR _T5Interrupt(void);
 int RF_state = 0;
 int RF_trigger_state = 0;   // used in RF Interrupt Service Routine
-
+int game_time = 0;          // Elapsed Game Time (in seconds)
 
 
 int main()
@@ -73,8 +73,8 @@ int main()
     int new_R_IR = ADC1BUF9;    // new reading from right analog IR sensor on base
     float L_IR = 0;         // average of new and last IR readings
     float R_IR = 0;         // average of new and last IR readings
-    int last_F_echo_state = _RB12;    // last value of Front RF echo input
-    int last_L_echo_state = _RB13;
+    int last_F_echo_state = _RB12;      // last value of Front RF echo input
+    int last_L_echo_state = _RB13;      // last value of Lateral  RF echo input
     int new_F_echo_state = _RB12;   // read state of RB12
     int new_L_echo_state = _RB13;   // read state of RB13
     int F_count = 0;        // count on TMR5
@@ -88,12 +88,20 @@ int main()
     float L_range = 1000;      // average of new and last IR readings
     float range_DIFF = 0.003;   // uncertainty in rangefinder
     float center2corner = 0.6*0.707;
-    int center_travel_state = 0;    
-    int game_timer = 0;     // running total of game time elapsed
-    
+    int center_travel_state = 0;    // Sub-state for Center destination of Traveling State
+    int ball_count = 0;     // number of balls currently in hopper
+    float wrap_up_time = 100;   // Time at which the robot stops collecting/shooting and heads for the center
+    int collecting_state = 0;   // Sub state for the Ball Collecting routine
+    float beam_DIST = 0.0761;   // Distance from corner to IR Collector Trigger Beam
+    float F2L_DIST = 0.17;      // Distance from F_IR sensor to L_IR sensor axis (in meters) (ADJUST ME!!!)
+    float L2F_DIST = 0.05;      // Distance from L_IR sensor to F_IF sensor axis (in meters) (ADJUST ME!!!)
     
     while(1)
     {
+        if(game_time >= wrap_up_time)
+        {
+            state = 0;
+        }
         switch(state)
         {
             // State 1: Initializing
@@ -114,7 +122,7 @@ int main()
             case 2:
                 switch(destination)
                 {
-                    // Destination 1: Center
+                    // Destination 1: Center from Random Location
                     case 1:
                         switch(center_travel_state)
                         {
@@ -180,11 +188,43 @@ int main()
                                     L_dir = ~L_dir;
                                 }
                                 break;
+                            // State 3: Back up to center of arena
+                            case 3:
+                                if (abs(center2corner - F_range) < range_DIFF)
+                                {
+                                    destination = 2;    // Arrived at center of arena
+                                    if(game_time >= wrap_up_time)   // If in the last 5 seconds, stall here forever
+                                    {
+                                        track_speed = 0;
+                                        L_dir = 1;
+                                        R_dir = 1;
+                                    }
+                                    else
+                                    {
+                                        state = 3;          // Else, Switch Overall State to 'Locating Ball Dispenser'
+                                        track_speed = 0;
+                                        L_dir = 1;
+                                        R_dir = 1;
+                                    }
+                                }
+                                else if (F_range > center2corner)
+                                {
+                                    track_speed = max_speed;    // Drive forward
+                                    L_dir = 1;
+                                    R_dir = 1;
+                                }
+                                else
+                                {
+                                    track_speed = max_speed;    // Drive Backward
+                                    L_dir = 0;
+                                    R_dir = 0;
+                                }
+                                break;
                                 
                         }
                         break;
                         
-                    // Destination 2: Ball Dispenser    
+                    // Destination 2: Ball Dispenser from Center  
                     case 2:
                         // travel to ball dispenser
                         // when you get there, change the state
@@ -194,43 +234,62 @@ int main()
             
             // State 3: Locating Ball Dispenser
             case 3:
-                new_L_IR = ADC1BUF10;       // Pin 17: AN10 (Analog Input) <-- Input from Left Base IR Sensor
-                new_R_IR = ADC1BUF9;        // Pin 18: AN9 (Analog Input) <-- Input from Right Base IR Sensor
+                new_L_IR = ADC1BUF10;                   // Pin 17: AN10 (Analog Input) <-- Input from Left Base IR Sensor
+                new_R_IR = ADC1BUF9;                    // Pin 18: AN9 (Analog Input) <-- Input from Right Base IR Sensor
                 L_IR = (last_L_IR + new_L_IR)/2.0;      // Slight Digital Average Filtering
                 R_IR = (last_R_IR + new_R_IR)/2.0;      // Slight Digital Average Filtering
-                last_L_IR = new_L_IR;       // Set the new_IR readings to the last_IR readings for the next loop
+                last_L_IR = new_L_IR;                   // Set the new_IR readings to the last_IR readings for the next loop
                 last_R_IR = new_R_IR;
                 
-                if (L_IR < IR_LOW && R_IR < IR_LOW) // If LIR = RIR = 0 --> Rotate Clockwise Fast
+                if (L_IR < IR_LOW && R_IR < IR_LOW)     // If LIR = RIR = 0 --> Rotate Clockwise Fast
                 {
                     track_speed = max_speed;
-                    L_dir = 1;      // Forward
-                    R_dir = 0;      // Reverse
+                    L_dir = 1;
+                    R_dir = 0;
                 }
-                else if (R_IR > IR_LOW && R_IR - L_IR > IR_DIFF) // If R_IR > L_IR --> Rotate Clockwise Slower
+                else if (R_IR > IR_LOW && R_IR - L_IR > IR_DIFF)    // If R_IR > L_IR --> Rotate CW Slower
                 {
-                    track_speed = max_speed / 2;
-                    L_dir = 1;      // Forward
-                    R_dir = 0;      // Reverse
+                    track_speed = max_speed * 2;
+                    L_dir = 1;
+                    R_dir = 0;
                 }
-                else if (L_IR > IR_LOW && L_IR - R_IR > IR_DIFF)
+                else if (L_IR > IR_LOW && L_IR - R_IR > IR_DIFF)    // If L_IR > R_IR --> Rotate CCW Slower
                 {
-                    track_speed = max_speed / 2;
-                    L_dir = 0;      // Reverse
-                    R_dir = 1;      // Forward
+                    track_speed = max_speed * 2;
+                    L_dir = 0;
+                    R_dir = 1;
                 }
-                else if (L_IR > IR_LOW && R_IR > IR_LOW && abs(L_IR - R_IR) < IR_DIFF ) // stop rotating when L_IR = R_IR > 0
+                else if (L_IR > IR_LOW && R_IR > IR_LOW && abs(L_IR - R_IR) < IR_DIFF ) // stop rotating when L_IR ~= R_IR > 0
                 {
                     track_speed = 0;
-                    L_dir = 1;      // Forward
-                    R_dir = 1;      // Forward
+                    L_dir = 1;
+                    R_dir = 1;
+                    state = 4;      // Start Collecting Balls
                 }
                 
                 break;
             
             // State 4: Collecting Balls    
             case 4:
-                // do the things
+                if (ball_count >= 6)
+                {
+                    state = 5;      // stop collecting balls  once you get to 6
+                    break;
+                }
+                switch(collecting_state)
+                {
+                    // case 0: Driving from the center of the arena to trigger the ball collector
+                    case 0:
+                        // If the tank is triggering the beam, stop and go to the next case
+                        // Else, keep driving forward
+                        break;
+                    // case 1: Back up a bit and get ready to trigger the beam again
+                    case 1:
+                        // If the tank is far enough back that it's not triggering the beam, stop and go back to case 0
+                        // Else, keep driving backward
+                        break;
+                }
+                
                 break;
             
             // State 5: Locating Goal    
@@ -265,7 +324,9 @@ int main()
          * Trig pulses should be 10 microseconds long (5 ticks)
          * Distance = V*T/2; where V is the speed of sound (343.2m/s) and T is the Echo pulse length
          */ 
-        if(RF_trigger_state == 2) // Handle Front RF
+        
+        // Handle Front RF
+        if(RF_trigger_state == 2)
         {
             new_F_echo_state = _RB12;
             if(new_F_echo_state != last_F_echo_state)
@@ -275,14 +336,15 @@ int main()
                 else
                 {
                     last_F_range = F_range;
-                    new_F_range = (TMR5 - F_count)*count2range;
+                    new_F_range = (TMR5 - F_count)*count2range + F2L_DIST;
                     F_range = (last_F_range + new_F_range)/2.0;     // digital signal averaging
                 }
             }
             last_F_echo_state = new_F_echo_state;
         }
-
-        if(RF_trigger_state == 5) // Handle Lateral RF
+        
+        // Handle Lateral RF
+        if(RF_trigger_state == 5)
         {
             new_L_echo_state = _RB13;
             if(new_L_echo_state != last_L_echo_state)
@@ -292,7 +354,7 @@ int main()
                 else
                 {
                     last_L_range = L_range;
-                    new_L_range = (TMR5 - L_count)*count2range;
+                    new_L_range = (TMR5 - L_count)*count2range + L2F_DIST;
                     L_range = (L_range + new_L_range)/2.0;     // digital signal averaging
                 }
             }
@@ -449,30 +511,31 @@ void config_IO(void)
     _ANSB15 = 1;
 }
 
-void _ISR _T4Interrupt(void)
+void __attribute__((interrupt, no_auto_psv)) _T4Interrupt(void)
 {
     _T4IF = 0;      // Clear interrupt flag
+    game_time += 0.1;
     switch(RF_state)
     {
         // State 0: Reading Front RF
         case 0:
             RF_trigger_state = 3;
+            RF_state = 1;
             PR5 = 5;
             _T5IF = 1;
-            RF_state = 1;
             break;
             
         // State 1: Reading Lateral RF
         case 1:
             RF_trigger_state = 0;
+            RF_state = 0;
             PR5 = 5;
             _T5IF = 1;
-            RF_state = 0;
             break;
     }
 }
 
-void _ISR _T5Interrupt(void) 
+void __attribute__((interrupt, no_auto_psv)) _T5Interrupt(void) 
 { 
     _T5IF = 0;      // Clear interrupt flag 
     switch(RF_trigger_state)
