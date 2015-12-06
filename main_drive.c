@@ -65,11 +65,13 @@ int collector_angle = 500;  // Turret Servo motor displacement during ball colle
 int cannon_min = 4000;      // Cannon Servo minimum angle in timer counts (NEEDS ADJUSTMENT!!!)
 int cannon_mid = 5000;      // Cannon Servo Turret midpoint angle in timer counts (NEEDS ADJUSTMENT!!!)
 int cannon_max = 6000;      // Cannon Servo Turret maximum angle in timer counts (NEEDS ADJUSTMENT!!!)
+float cannon_pause = 0.5;   // Wait time between cannon servo position changes (Adjust Me)
 float beam_DIST = 0.0761;   // Distance from corner to IR Collector Trigger Beam
 float F2L_DIST = 0.17;      // Distance from F_IR sensor to L_IR sensor axis (in meters) (ADJUST ME!!!)
 float L2F_DIST = 0.05;      // Distance from L_IR sensor to F_IF sensor axis (in meters) (ADJUST ME!!!)
 int max_tracking_step = 10; // Maximum Angular step (in timer counts) which the turret takes while tracking (ADJUST ME!!!)
 float IR_adjustment = 0;    // ADJUST ME!!! How much greater if R_IR than L_IR?
+int T_IR_min = 1400;        // Minimum value of Turret IR sensor to fire a ball (ADJUST ME!!!)
 
 
 int main()
@@ -115,7 +117,10 @@ int main()
     int cannon_angle = cannon_mid;  // angle (in timer counts) of the cannon loading servo motor
     int turret_tracking = 0;        // Is the turret currently seeking the goal (1-Yes/0-N0)?
     int tracking_step = max_tracking_step;  // Angular step which the turret will take during a loop
-    int shooting_motors = 0;    // Are the shooting motors spinning (1-Yes/0-No)
+    int cannon_motors = 0;    // Are the shooting motors spinning (1-Yes/0-No)
+    int shooting_state = 0;     // Sub state of the shooting balls state
+    int switch_count = 0;       // number of times since the turret went active that the turret has switched directions
+    float last_cannon_time;     // Last game_time that the turret fired
     
     while(game_time < end_of_round)
     {
@@ -131,11 +136,11 @@ int main()
                 R_dir = 1;      // Forward
                 track_speed = 3125;
 
-                state = 7;
+                state = 7;      // GO TO TESTING STATE
                 
                 break;
                 
-            //State 2: Traveling    
+            //State 2: Traveling to Center   
             case 2:
                 switch(destination)
                 {
@@ -251,6 +256,13 @@ int main()
             
             // State 3: Locating Ball Dispenser
             case 3:
+                if(game_time + 5 >= end_of_round)   // Abort Ball collection and drive to center if in the last 5 seconds of the game
+                {
+                    state = 1;
+                    destination = 1;
+                    break;
+                }
+                
                 new_L_IR = ADC1BUF10;       // Pin 17: AN10 (Analog Input) <-- Input from Left Base IR Sensor
                 new_R_IR = ADC1BUF9;        // Pin 18: AN9 (Analog Input) <-- Input from Right Base IR Sensor
                 L_IR = (last_L_IR + new_L_IR)/2.0;      // Slight Digital Average Filtering
@@ -291,6 +303,7 @@ int main()
                 if (ball_count >= 6)
                 {
                     state = 5;      // stop collecting balls once you get to 6
+                    shooting_state = 0;
                     turret_tracking = 1;
                     break;
                 }
@@ -335,18 +348,77 @@ int main()
             // State 5: Shooting Balls    
             case 5:
                 turret_tracking = 1;
-                shooting_motors = 1;
-                if(ball_count <= 0)
+                cannon_motors = 1;
+                
+                if(ball_count <= 0)     // Stop if out of balls!
                 {
                     state = 3;
+                    shooting_state = 0;
+                    turret_tracking = 0;
+                    cannon_angle = cannon_mid;
+                    break;
+                }
+
+                switch(shooting_state)
+                {
+                    // Shooting State 0: Initialize and drive to center
+                    case 0:
+                        switch_count = 0;
+                        if(abs(F_range - center2corner) < range_DIFF)
+                        {
+                            track_speed = 0;
+                            L_dir = 1;
+                            R_dir = 1;
+                            shooting_state = 1;
+                        }
+                        else if (F_range > center2corner)
+                        {
+                            track_speed = max_speed*2;
+                            L_dir = 1;
+                            R_dir = 1;
+                        }
+                        else
+                        {
+                           track_speed = max_speed;
+                           L_dir = 0;
+                           R_dir = 0; 
+                        }
+                        
+                        break;
+                    // Shooting State 1: Finding the active goal
+                    case 1:
+                        if(T_IR > T_IR_min && switch_count > 10)    // Wait for turret to find active goal 
+                        {
+                            shooting_state = 2;
+                            last_cannon_time = game_time;
+                            cannon_angle = cannon_min;
+                            ball_count -= 1;
+                        }
+                        break;
+                    // Shooting State 2: Shooting Balls
+                    case 2:
+                        if(game_time >= last_cannon_time + cannon_pause*2)
+                        {
+                            cannon_angle = cannon_min;
+                            ball_count -= 1;
+                            last_cannon_time = game_time;
+                        }
+                        else if (game_time >= last_cannon_time + cannon_pause)
+                        {
+                            cannon_angle = cannon_max;
+                        }
+                        break;
                 }
                 break;
             
             // test drive state
             case 7:
+                end_of_round = 25;
                 L_dir = 1;      // Forward
-                track_speed = F_range;
+                track_speed = (max_speed*5/F_range)/1;
                 R_dir = 1;      // Forward
+                turret_tracking = 1;
+                cannon_motors = 1;
                 break;
                 
         }
@@ -406,9 +478,11 @@ int main()
             new_T_IR = ADC1BUF10;                   // Pin 17: AN10 (Analog Input) <-- Input from Left Base IR Sensor
             T_IR = (last_T_IR + new_T_IR)/2.0;      // Slight Digital Average Filtering
 
+            // Adjust the tracking direction of the turret
             if(last_T_IR > T_IR)        // Invert Tracking direction if signal is becoming weaker
             {
                 tracking_step *= -1;
+                switch_count =+ 1;
             }
             if(turret_angle > turret_max)       // don't turn out of the range of motion of the turret
             {
@@ -442,7 +516,7 @@ int main()
             _LATA2 = 1;
         
         // Turn on/Off shooting motors
-        if(shooting_motors)
+        if(cannon_motors)
         {
             _LATB9 = 1;
         }
@@ -453,7 +527,7 @@ int main()
     }
     track_speed = 0;
     turret_tracking = 0;
-    shooting_motors = 0;
+    cannon_motors = 0;
     
 return 0;
 }
