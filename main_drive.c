@@ -25,13 +25,19 @@
  * Pin 16: RB13 (Digital Input) <-- Echo from lateral RangeFinder
  * Pin 17: AN10 RB14 (Analog Input) <-- Input from Left Base IR Sensor
  * Pin 18: AN9 RB15 (Analog Input) <-- Input from Right Base IR Sensor
- * Pin 19: VSS
- * Pin 20: VDD
+ * Pin 19: GND -- VSS
+ * Pin 20: 3.3 V -- VDD
+ * 
  * Timer 1: OC1 PWM
  * Timer 2: OC2 PWM
  * Timer 3: OC3 PWM
  * Timer 4: Range Finders Period/ Game Timer
  * Timer 5: Range Finder Triggers/Echos
+ * 
+ * Ribbon Cable from Turret to Base:
+ * Balck --> GND -- VSS
+ * White --> IR_T
+ * 
  */
 
 #include <p24F16KA301.h>
@@ -57,19 +63,20 @@ int RF_trigger_state = 0;   // used in RF Interrupt Service Routine
 float game_time = 0;        // Elapsed Game Time (in seconds)
 
 // Adjustable Parameters
-int turret_min = 4000;      // Turret minimum angle in timer counts (NEEDS ADJUSTMENT!!!)
-int turret_mid = 5000;      // Turret midpoint angle in timer counts (NEEDS ADJUSTMENT!!!)
-int turret_max = 6000;      // Turret maximum angle in timer counts (NEEDS ADJUSTMENT!!!)
+int turret_min = 200;      // Turret minimum angle (absolute min is 500)
+int turret_mid = 700;      // Turret midpoint angle in timer counts (NEEDS ADJUSTMENT!!!)
+int turret_max = 1300;      // Turret maximum angle (absolute is 1000)
 float collector_pause = 0.5;// Wait time between ball collection cycles (NEEDS ADJUSTMENT!!!!)
 int collector_angle = 500;  // Turret Servo motor displacement during ball collection (NEEDS ADJUSTMENT!!!)
-int cannon_min = 4000;      // Cannon Servo minimum angle in timer counts (NEEDS ADJUSTMENT!!!)
-int cannon_mid = 5000;      // Cannon Servo Turret midpoint angle in timer counts (NEEDS ADJUSTMENT!!!)
-int cannon_max = 6000;      // Cannon Servo Turret maximum angle in timer counts (NEEDS ADJUSTMENT!!!)
+int cannon_min = 600;      // Cannon Servo minimum angle (Absolute Min is 250))
+int cannon_mid = 725;      // Cannon Servo Turret midpoint angle in timer counts (NEEDS ADJUSTMENT!!!)
+int cannon_max = 750;      // Cannon Servo maximum angle (absolute max is 1200)
 float cannon_pause = 0.5;   // Wait time between cannon servo position changes (Adjust Me)
 float beam_DIST = 0.0761;   // Distance from corner to IR Collector Trigger Beam
 float F2L_DIST = 0.17;      // Distance from F_IR sensor to L_IR sensor axis (in meters) (ADJUST ME!!!)
 float L2F_DIST = 0.05;      // Distance from L_IR sensor to F_IF sensor axis (in meters) (ADJUST ME!!!)
-int max_tracking_step = 10; // Maximum Angular step (in timer counts) which the turret takes while tracking (ADJUST ME!!!)
+float max_tracking_step = 0.001; // Maximum Angular step (in timer counts) which the turret takes while tracking (ADJUST ME!!!)
+float tracking_delay = 0.1;
 float IR_adjustment = 0;    // ADJUST ME!!! How much greater if R_IR than L_IR?
 int T_IR_min = 1400;        // Minimum value of Turret IR sensor to fire a ball (ADJUST ME!!!)
 
@@ -113,7 +120,7 @@ int main()
     float end_of_round = 105;   // Time (on game timer at which the round ends
     int collecting_state = 0;   // Sub state for the Ball Collecting routine
     float last_game_time = 0;   // beginning of ball collector timer
-    int turret_angle = turret_mid;  // angle (in timer counts) of the turret servo motor
+    float turret_angle = turret_max-100;  // angle (in timer counts) of the turret servo motor
     int cannon_angle = cannon_mid;  // angle (in timer counts) of the cannon loading servo motor
     int turret_tracking = 0;        // Is the turret currently seeking the goal (1-Yes/0-N0)?
     int tracking_step = max_tracking_step;  // Angular step which the turret will take during a loop
@@ -492,12 +499,12 @@ int main()
             {
                 tracking_step = max_tracking_step;
             }
-            
+            turret_angle += tracking_step;
             last_T_IR = new_L_IR;       // Set the new_T_IR reading to the last_IR readings for the next loop
         }
         
         // Set Angles of Servo Motors
-        OC1R = turret_angle;
+        OC1R = turret_angle/1;
         OC3R = cannon_angle;
         
         // Set speed of stepper motors
