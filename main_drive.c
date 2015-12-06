@@ -11,16 +11,16 @@
  * Pin 2:
  * Pin 3:
  * Pin 4: OC2 --> Step PWM to Pololu ESC's --> Left and Right Tracks
- * Pin 5: OC3 --> PWM (currently unused)
+ * Pin 5: OC3 --> PWM Signal to Cannon Feed Servo Motor
  * Pin 6: _LATB2 (Digital Output) --> Dir on Left Track Pololu ESC Board
  * Pin 7: _LATA2 (Digital Output) --> Dir on Right Track Pololu ESC Board
- * Pin 8: _LATA3 (Digital Output) --> Trig on Front Range Finder
- * Pin 9: _LATB4 (Digital Output) --> Trig on Lateral Range Finder
- * Pin 10: 
- * Pin 11:
- * Pin 12:
- * Pin 13:
- * Pin 14: OC1 --> PWM (unused)
+ * Pin 8:
+ * Pin 9: AN15 RB4 (Analog Input) --> Input From Turret IR Sensor
+ * Pin 10:
+ * Pin 11: _LATB7 (Digital Output) --> Trig on Front Range Finder
+ * Pin 12: _LATB8 (Digital Output) --> Trig on Lateral Range Finder
+ * Pin 13: _LATB9 (Digital Output) --> MOSFET Trigger to cannon motors
+ * Pin 14: OC1 --> PWM signal to Turret Servo Motor
  * Pin 15: RB12 (Digital Input) <-- Echo from front RangeFinder
  * Pin 16: RB13 (Digital Input) <-- Echo from lateral RangeFinder
  * Pin 17: AN10 RB14 (Analog Input) <-- Input from Left Base IR Sensor
@@ -54,7 +54,22 @@ void _ISR _T4Interrupt(void);
 void _ISR _T5Interrupt(void);
 int RF_state = 0;
 int RF_trigger_state = 0;   // used in RF Interrupt Service Routine
-int game_time = 0;          // Elapsed Game Time (in seconds)
+float game_time = 0;        // Elapsed Game Time (in seconds)
+
+// Adjustable Parameters
+int turret_min = 4000;      // Turret minimum angle in timer counts (NEEDS ADJUSTMENT!!!)
+int turret_mid = 5000;      // Turret midpoint angle in timer counts (NEEDS ADJUSTMENT!!!)
+int turret_max = 6000;      // Turret maximum angle in timer counts (NEEDS ADJUSTMENT!!!)
+float collector_pause = 0.5;// Wait time between ball collection cycles (NEEDS ADJUSTMENT!!!!)
+int collector_angle = 500;  // Turret Servo motor displacement during ball collection (NEEDS ADJUSTMENT!!!)
+int cannon_min = 4000;      // Cannon Servo minimum angle in timer counts (NEEDS ADJUSTMENT!!!)
+int cannon_mid = 5000;      // Cannon Servo Turret midpoint angle in timer counts (NEEDS ADJUSTMENT!!!)
+int cannon_max = 6000;      // Cannon Servo Turret maximum angle in timer counts (NEEDS ADJUSTMENT!!!)
+float beam_DIST = 0.0761;   // Distance from corner to IR Collector Trigger Beam
+float F2L_DIST = 0.17;      // Distance from F_IR sensor to L_IR sensor axis (in meters) (ADJUST ME!!!)
+float L2F_DIST = 0.05;      // Distance from L_IR sensor to F_IF sensor axis (in meters) (ADJUST ME!!!)
+int max_tracking_step = 10; // Maximum Angular step (in timer counts) which the turret takes while tracking (ADJUST ME!!!)
+float IR_adjustment = 0;    // ADJUST ME!!! How much greater if R_IR than L_IR?
 
 
 int main()
@@ -69,10 +84,13 @@ int main()
     int IR_DIFF = 15;       // minimum difference between Left_IR and Right_IR
     int last_L_IR = ADC1BUF10;  // pervious reading of new_L_IR
     int last_R_IR = ADC1BUF9;   // pervious reading of new_R_IR
+    int last_T_IR = ADC1BUF15;  // previous reading from turret analog IR sensor
     int new_L_IR = ADC1BUF10;   // new reading from left analog IR sensor on base
     int new_R_IR = ADC1BUF9;    // new reading from right analog IR sensor on base
-    float L_IR = 0;         // average of new and last IR readings
-    float R_IR = 0;         // average of new and last IR readings
+    int new_T_IR = ADC1BUF15;   // new reading from turret analog IR sensor
+    float L_IR = 0;         // average of new and last left IR readings
+    float R_IR = 0;         // average of new and last right IR readings
+    float T_IR = 0;         // average of new and last turret IR readings
     int last_F_echo_state = _RB12;      // last value of Front RF echo input
     int last_L_echo_state = _RB13;      // last value of Lateral  RF echo input
     int new_F_echo_state = _RB12;   // read state of RB12
@@ -87,21 +105,20 @@ int main()
     float F_range = 1000;      // average of new and last IR readings
     float L_range = 1000;      // average of new and last IR readings
     float range_DIFF = 0.003;   // uncertainty in rangefinder
-    float center2corner = 0.6*0.707;
+    float center2corner = 0.6*0.707;    // distance from the center to the corner of the arena
     int center_travel_state = 0;    // Sub-state for Center destination of Traveling State
     int ball_count = 0;     // number of balls currently in hopper
-    float wrap_up_time = 100;   // Time at which the robot stops collecting/shooting and heads for the center
+    float end_of_round = 105;   // Time (on game timer at which the round ends
     int collecting_state = 0;   // Sub state for the Ball Collecting routine
-    float beam_DIST = 0.0761;   // Distance from corner to IR Collector Trigger Beam
-    float F2L_DIST = 0.17;      // Distance from F_IR sensor to L_IR sensor axis (in meters) (ADJUST ME!!!)
-    float L2F_DIST = 0.05;      // Distance from L_IR sensor to F_IF sensor axis (in meters) (ADJUST ME!!!)
+    float last_game_time = 0;   // beginning of ball collector timer
+    int turret_angle = turret_mid;  // angle (in timer counts) of the turret servo motor
+    int cannon_angle = cannon_mid;  // angle (in timer counts) of the cannon loading servo motor
+    int turret_tracking = 0;        // Is the turret currently seeking the goal (1-Yes/0-N0)?
+    int tracking_step = max_tracking_step;  // Angular step which the turret will take during a loop
+    int shooting_motors = 0;    // Are the shooting motors spinning (1-Yes/0-No)
     
-    while(1)
+    while(game_time < end_of_round)
     {
-        if(game_time >= wrap_up_time)
-        {
-            state = 0;
-        }
         switch(state)
         {
             // State 1: Initializing
@@ -193,7 +210,7 @@ int main()
                                 if (abs(center2corner - F_range) < range_DIFF)
                                 {
                                     destination = 2;    // Arrived at center of arena
-                                    if(game_time >= wrap_up_time)   // If in the last 5 seconds, stall here forever
+                                    if(game_time >= end_of_round - 5)   // If in the last 5 seconds, stall here forever
                                     {
                                         track_speed = 0;
                                         L_dir = 1;
@@ -234,11 +251,11 @@ int main()
             
             // State 3: Locating Ball Dispenser
             case 3:
-                new_L_IR = ADC1BUF10;                   // Pin 17: AN10 (Analog Input) <-- Input from Left Base IR Sensor
-                new_R_IR = ADC1BUF9;                    // Pin 18: AN9 (Analog Input) <-- Input from Right Base IR Sensor
+                new_L_IR = ADC1BUF10;       // Pin 17: AN10 (Analog Input) <-- Input from Left Base IR Sensor
+                new_R_IR = ADC1BUF9;        // Pin 18: AN9 (Analog Input) <-- Input from Right Base IR Sensor
                 L_IR = (last_L_IR + new_L_IR)/2.0;      // Slight Digital Average Filtering
-                R_IR = (last_R_IR + new_R_IR)/2.0;      // Slight Digital Average Filtering
-                last_L_IR = new_L_IR;                   // Set the new_IR readings to the last_IR readings for the next loop
+                R_IR = (last_R_IR + new_R_IR)/2.0 - IR_adjustment;  // Adjust for differences in IR sensors
+                last_L_IR = new_L_IR;       // Set the new_IR readings to the last_IR readings for the next loop
                 last_R_IR = new_R_IR;
                 
                 if (L_IR < IR_LOW && R_IR < IR_LOW)     // If LIR = RIR = 0 --> Rotate Clockwise Fast
@@ -273,36 +290,57 @@ int main()
             case 4:
                 if (ball_count >= 6)
                 {
-                    state = 5;      // stop collecting balls  once you get to 6
+                    state = 5;      // stop collecting balls once you get to 6
+                    turret_tracking = 1;
                     break;
                 }
                 switch(collecting_state)
                 {
                     // case 0: Driving from the center of the arena to trigger the ball collector
                     case 0:
-                        // If the tank is triggering the beam, stop and go to the next case
-                        // Else, keep driving forward
+                        turret_angle = turret_mid;
+                        turret_tracking = 0;
+                        if(F_range <= 0.25*center2corner) // (NEEDS ADJUSTMENT!!!)
+                        {
+                            collecting_state = 1;
+                            break;
+                        }
+                        else
+                        {
+                            track_speed = max_speed;
+                            L_dir = 1;
+                            R_dir = 1;
+                        }
                         break;
-                    // case 1: Back up a bit and get ready to trigger the beam again
-                    case 1:
-                        // If the tank is far enough back that it's not triggering the beam, stop and go back to case 0
-                        // Else, keep driving backward
+                    // case 1: pivot the turret to get another ball
+                    case 1:// turn the turret some amount
+                        // start counting on the game timer to give the turret a chance to reach the destination
+                        // if the timer is reached, turn the turret back to the midpoint angle
+                        if(game_time > last_game_time + 2*collector_pause)
+                        {
+                            turret_angle = turret_mid;
+                            last_game_time = game_time;
+                            // Turn the turret back to the midpoint and reset the timer
+                        }
+                        else if(game_time > last_game_time + collector_pause)
+                        {
+                            turret_angle = turret_mid + collector_angle;
+                        // turn the turret some amount
+                        }
                         break;
                 }
                 
                 break;
             
-            // State 5: Locating Goal    
+            // State 5: Shooting Balls    
             case 5:
-                // do the things
+                turret_tracking = 1;
+                shooting_motors = 1;
+                if(ball_count <= 0)
+                {
+                    state = 3;
+                }
                 break;
-            
-            // State 6: Shooting Balls    
-            case 6:
-                // do the things
-                break;
-                
-            break;
             
             // test drive state
             case 7:
@@ -314,8 +352,8 @@ int main()
         }
         
         // Handle Range Finders and Game Timer
-        /* Pin 8: _LATA3 (Digital Output) --> Trig on Front Range Finder
-         * Pin 9: _LATB4 (Digital Output) --> Trig on Lateral Range Finder
+        /* Pin 11: _LATB7 (Digital Output) --> Trig on Front Range Finder
+         * Pin 12: _LATB8 (Digital Output) --> Trig on Lateral Range Finder
          * Pin 15: RB12 (Digital Input) <-- Echo from front RangeFinder
          * Pin 16: RB13 (Digital Input) <-- Echo from lateral RangeFinder
          * Timer 4 (TMR4) has a tick of 2 microseconds and period of 0.1 second
@@ -361,16 +399,39 @@ int main()
             last_L_echo_state = new_L_echo_state;
         }
         
-        // Set speed and direction of motors
-//        PR1 = ADC1BUF10;
-//        OC1RS = PR1;
-//        OC1R = PR1/2.0;
+        // Handle Turret Tracking
+        if(turret_tracking)
+        {
+            // Update the turret IR reading
+            new_T_IR = ADC1BUF10;                   // Pin 17: AN10 (Analog Input) <-- Input from Left Base IR Sensor
+            T_IR = (last_T_IR + new_T_IR)/2.0;      // Slight Digital Average Filtering
+
+            if(last_T_IR > T_IR)        // Invert Tracking direction if signal is becoming weaker
+            {
+                tracking_step *= -1;
+            }
+            if(turret_angle > turret_max)       // don't turn out of the range of motion of the turret
+            {
+                tracking_step = -1 * max_tracking_step;
+            }
+            if(turret_angle < turret_min)       // don't turn out of the range of motion of the turret
+            {
+                tracking_step = max_tracking_step;
+            }
+            
+            last_T_IR = new_L_IR;       // Set the new_T_IR reading to the last_IR readings for the next loop
+        }
+        
+        // Set Angles of Servo Motors
+        OC1R = turret_angle;
+        OC3R = cannon_angle;
+        
+        // Set speed of stepper motors
         PR2 = track_speed;
         OC2RS = PR2;
         OC2R = PR2/2.0;
-//        PR3 = track_speed;
-//        OC3RS = PR3;
-//        OC3R = PR3/2.0;
+
+        // Set direction of stepper motors
         if(L_dir == 1)
             _LATB2 = 1;
         else
@@ -379,8 +440,21 @@ int main()
             _LATA2 = 0;
         else
             _LATA2 = 1;
+        
+        // Turn on/Off shooting motors
+        if(shooting_motors)
+        {
+            _LATB9 = 1;
+        }
+        else
+        {
+            _LATB9 = 0;
+        }
     }
-
+    track_speed = 0;
+    turret_tracking = 0;
+    shooting_motors = 0;
+    
 return 0;
 }
 
@@ -388,7 +462,7 @@ void config_ad(void)
 {
 
     // AD1CHS register
-    _CH0NA = 0;         // AD1CHS<7:5> -- Use VDD as negative input
+    _CH0NA = 0;         // AD1CHS<7:5> -- Use VSS as negative input
 
     // AD1CON1 register
     _ADON = 1;          // AD1CON1<15> -- Turn on A/D
@@ -427,23 +501,23 @@ void config_ad(void)
 
 void config_PWM(void)
 {
-     // Configure Timer 1
+     // Configure Timer 1 --> PWM signal to Turret Servo Motor
     _TON = 1;                   //enable Timer1
     _TCS = 0;                   //Set source to internal clock
-    _TCKPS = 0b11;              //Select prescale value of 256:1 - Tick Period of 64 microseconds
-    PR1 = 2;                    //Set initial timer period to 128 microseconds
+    _TCKPS = 0b01;              //Select prescale value of 8:1 - Tick Period of 2 microseconds
+    PR1 = 10000;                //Set timer frequency to 50 Hz
     TMR1 = 0;                   //Set timer count to 0
-    // Configure Timer 2
+    // Configure Timer 2 --> PWM step signal to Stepper Motors
     T2CONbits.TON = 1;          //enable Timer2
     T2CONbits.TCS = 0;          //Set source to internal clock
     T2CONbits.TCKPS = 0b11;     //Select prescale value of 256:1 - Tick Period of 64 microseconds
     PR2 = 2;                    //Set initial timer period to 128 microseconds
     TMR2 = 0;                   //Set timer count to 0
-    // Configure Timer 3
+    // Configure Timer 3 --> PWM signal to Cannon Feed Servo Motor
     T3CONbits.TON = 1;          //enable Timer3
     T3CONbits.TCS = 0;          //Set source to internal clock
-    T3CONbits.TCKPS = 0b11;     //Select prescale value of 256:1 - Tick Period of 64 microseconds
-    PR3 = 2;                    //Set initial timer period to 128 microseconds
+    T3CONbits.TCKPS = 0b01;     //Select prescale value of 8:1 - Tick Period of 2 microseconds
+    PR3 = 10000;                //Set timer frequency to 50 Hz
     TMR3 = 0;                   //Set timer count to 0
     // Configure Timer 4
     T4CONbits.TON = 1;
@@ -473,7 +547,7 @@ void config_PWM(void)
     OC1CON1bits.OCTSEL = 0b100;     //Select Timer1 to be timer source
     OC1CON1bits.OCM = 0b110;        //Select Edge-Aligned PWM mode
     OC1CON2bits.SYNCSEL = 0b01011;  //Select Timer1 as synchronization source
-    OC1RS = PR1/2;                  //Set duty cycle to 1/2 period
+    OC1RS = turret_mid;             //Set duty cycle to the midpoint value
   // Configure Output Compare 2
     OC2CON1bits.OCTSEL = 0b000;     //Select Timer2 to be timer source
     OC2CON1bits.OCM = 0b110;        //Select Edge-Aligned PWM mode
@@ -483,13 +557,13 @@ void config_PWM(void)
     OC3CON1bits.OCTSEL = 0b001;     //Select Timer3 to be timer source
     OC3CON1bits.OCM = 0b110;        //Select Edge-Aligned PWM mode
     OC3CON2bits.SYNCSEL = 0b01101;  //Select Timer3 as synchronization source
-    OC3RS = PR3/2;                  //Set duty cycle to 1/2 period
+    OC3RS = cannon_mid;             //Set duty cycle to the midpoint value
 }
 
 void config_IO(void)
 {
- /* Pin 15: AN12 RB12 (Analog Input) <-- Input from front RangeFinder
- * Pin 16: AN11 RB13 (Analog Input) <-- Input from lateral RangeFinder
+ /*
+ * Pin 9: AN15 RB4 (Analog Input) --> Input From Turret IR Sensor
  * Pin 17: AN10 RB14 (Analog Input) <-- Input from Left Base IR Sensor
  * Pin 18: AN9 RB15 (Analog Input) <-- Input from Right Base IR Sensor*/
     // Configure the digital I/O ports
@@ -498,15 +572,16 @@ void config_IO(void)
     ANSA = 0;           //disables Port A analog input
     ANSB = 0;           //disables Port B analog input
     
-    //Set Analog in pin to input mode
+    //Set input pins to input mode
+    _TRISB4 = 1;
     _TRISB12 = 1;
     _TRISB13 = 1;
     _TRISB14 = 1;
     _TRISB15 = 1;
     
     //Enable Analog in read from analog in pins
-    _ANSB12 = 1;
-    _ANSB13 = 1;
+
+    _ANSB4 = 1;
     _ANSB14 = 1;
     _ANSB15 = 1;
 }
@@ -543,7 +618,7 @@ void __attribute__((interrupt, no_auto_psv)) _T5Interrupt(void)
         // State 0: time to raise Front RF_trigger
         case 0:
             PR5 = 5;        // 10 microsecond pulse
-            _LATA3 = 1;
+            _LATB7 = 1;
             RF_trigger_state = 1;
             TMR5 = 0;
             break;
@@ -551,7 +626,7 @@ void __attribute__((interrupt, no_auto_psv)) _T5Interrupt(void)
         // State 1: time to drop Front RF_trigger and listen for Front RF echo
         case 1:
             PR5 = 50000;
-            _LATA3 = 0;
+            _LATB7 = 0;
             RF_trigger_state = 2;
             TMR5 = 0;
             break;
@@ -564,7 +639,7 @@ void __attribute__((interrupt, no_auto_psv)) _T5Interrupt(void)
         // State 3: time to raise Lateral RF_trigger   
         case 3:
             PR5 = 5;        // 10 microsecond pulse
-            _LATB4 = 1;
+            _LATB8 = 1;
             RF_trigger_state = 4;
             TMR5 = 0;
             break;
@@ -572,7 +647,7 @@ void __attribute__((interrupt, no_auto_psv)) _T5Interrupt(void)
         // State 4: time to drop Lateral RF_trigger and listen for Lateral RF echo
         case 4:
             PR5 = 50000;
-            _LATB4 = 0;
+            _LATB8 = 0;
             RF_trigger_state = 5;
             TMR5 = 0;
             break;
