@@ -63,14 +63,15 @@ int RF_trigger_state = 0;   // used in RF Interrupt Service Routine
 float game_time = 0;        // Elapsed Game Time (in seconds)
 
 // Adjustable Parameters
+int max_speed = 200;         // constant for minimum value of track_speed
 int turret_min = 200;      // Turret minimum angle (absolute min is 500)
 int turret_mid = 700;      // Turret midpoint angle in timer counts (NEEDS ADJUSTMENT!!!)
 int turret_max = 1300;      // Turret maximum angle (absolute is 1000)
 float collector_pause = 0.5;// Wait time between ball collection cycles (NEEDS ADJUSTMENT!!!!)
 int collector_angle = 500;  // Turret Servo motor displacement during ball collection (NEEDS ADJUSTMENT!!!)
-int cannon_min = 600;      // Cannon Servo minimum angle (Absolute Min is 250))
-int cannon_mid = 725;      // Cannon Servo Turret midpoint angle in timer counts (NEEDS ADJUSTMENT!!!)
-int cannon_max = 750;      // Cannon Servo maximum angle (absolute max is 1200)
+int cannon_min = 700;      // Cannon Servo minimum angle (Absolute Min is 250))
+int cannon_mid = 900;      // Cannon Servo Turret midpoint angle in timer counts (NEEDS ADJUSTMENT!!!)
+int cannon_max = 1100;      // Cannon Servo maximum angle (absolute max is 1200)
 float cannon_pause = 0.5;   // Wait time between cannon servo position changes (Adjust Me)
 float beam_DIST = 0.0761;   // Distance from corner to IR Collector Trigger Beam
 float F2L_DIST = 0.17;      // Distance from F_IR sensor to L_IR sensor axis (in meters) (ADJUST ME!!!)
@@ -88,7 +89,6 @@ int main()
     int L_dir = 1;          // Left track direction (1=forward, 0=backward)
     int R_dir = 0;          // Right track direction (1=forward, 0=backward)
     int track_speed = 40;    // PWM period of STEP pulses to track pololu boards
-    int max_speed = 40;     // constant for minimum value of track_speed
     int IR_LOW = 1500;      // min (ambient) analog IR reading
     int IR_DIFF = 15;       // minimum difference between Left_IR and Right_IR
     int last_L_IR = ADC1BUF10;  // pervious reading of new_L_IR
@@ -422,10 +422,12 @@ int main()
             case 7:
                 end_of_round = 25;
                 L_dir = 1;      // Forward
-                track_speed = (max_speed*5/F_range)/1;
+                track_speed = max_speed;
                 R_dir = 1;      // Forward
-                turret_tracking = 1;
-                cannon_motors = 1;
+                turret_tracking = 0;
+                turret_angle = turret_min;
+                cannon_angle = cannon_min;
+                cannon_motors = 0;
                 break;
                 
         }
