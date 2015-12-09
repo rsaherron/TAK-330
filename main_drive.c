@@ -58,9 +58,15 @@ void config_PWM(void);
 void config_IO(void);
 void _ISR _T4Interrupt(void);
 void _ISR _T5Interrupt(void);
+void __attribute__ ((__interrupt__)) _IC3Interrupt(void);
+void config_IC(void);
 int RF_state = 0;
 int RF_trigger_state = 0;   // used in RF Interrupt Service Routine
-float game_time = 0;        // Elapsed Game Time (in seconds)
+float game_time = 0.0;        // Elapsed Game Time (in seconds)
+int IC_count = 0;
+float F_range = 0.0;
+int range_count = 0;
+float count2range = 3.342e-4;   // convert 2 microsecond counts to meters
 
 // Adjustable Parameters
 int max_speed = 40;         // constant for minimum value of track_speed
@@ -106,12 +112,10 @@ int main()
     int new_L_echo_state = _RB13;   // read state of RB13
     int F_count = 0;        // count on TMR5
     int L_count = 0;        // count on TMR5
-    float count2range = 3.342e-4;   // convert 2 microsecond counts to meters
     int last_F_range = 0;   // pervious reading of new_F_range
     int last_L_range = 0;   // pervious reading of new_L_range
     int new_F_range = 0;    // new reading from front analog range finder
     int new_L_range = 0;    // new reading from lateral analog range finder
-    float F_range = 1000;      // average of new and last IR readings
     float L_range = 1000;      // average of new and last IR readings
     float range_DIFF = 0.003;   // uncertainty in rangefinder
     float center2corner = 0.6*0.707;    // distance from the center to the corner of the arena
@@ -149,6 +153,7 @@ int main()
             case 1:
                 config_IO();
                 config_ad();
+                config_IC();
                 config_PWM();
                 destination = 1;// Center
                 L_dir = 1;      // Forward
@@ -443,23 +448,23 @@ int main()
          * Distance = V*T/2; where V is the speed of sound (343.2m/s) and T is the Echo pulse length
          */ 
         
-        // Handle Front RF
-        if(RF_trigger_state == 2)
-        {
-            new_F_echo_state = _RB12;
-            if(new_F_echo_state != last_F_echo_state)
-            {
-                if(last_F_echo_state == 0)
-                    F_count = TMR5;
-                else
-                {
-                    last_F_range = F_range;
-                    new_F_range = (TMR5 - F_count)*count2range + F2L_DIST;
-                    F_range = (last_F_range + new_F_range)/2.0;     // digital signal averaging
-                }
-            }
-            last_F_echo_state = new_F_echo_state;
-        }
+//        // Handle Front RF
+//        if(RF_trigger_state == 2)
+//        {
+//            new_F_echo_state = _RB12;
+//            if(new_F_echo_state != last_F_echo_state)
+//            {
+//                if(last_F_echo_state == 0)
+//                    F_count = TMR5;
+//                else
+//                {
+//                    last_F_range = F_range;
+//                    new_F_range = (TMR5 - F_count)*count2range + F2L_DIST;
+//                    F_range = (last_F_range + new_F_range)/2.0;     // digital signal averaging
+//                }
+//            }
+//            last_F_echo_state = new_F_echo_state;
+//        }
         
         // Handle Lateral RF
         if(RF_trigger_state == 5)
@@ -744,4 +749,42 @@ void __attribute__((interrupt, no_auto_psv)) _T5Interrupt(void)
             RF_trigger_state = 0;
             break;
     }
-} 
+}
+
+void __attribute__ ((__interrupt__)) _IC3Interrupt(void)
+// Front US Rangefinder
+{
+    int C1 = 0; int C2 = 0; int C3 = 0; int C4 = 0; int C5 = 0; float IC_ave = 0;
+    IFS2bits.IC3IF = 0; // Reset respective interrupt flag
+    IC_count = IC3BUF; // Read and save off first entry
+    C5 = C4;
+    C4 = C3;
+    C3 = C2;
+    C2 = C1;
+    C1 = IC_count;
+    range_count += 1;
+    if(range_count >= 5)
+    {
+        IC_ave = (C1 + C2 + C3 + C4 + C5)/5.0;
+        F_range = IC_ave * count2range + F2L_DIST;
+        range_count = 0;
+    }
+}
+
+void config_IC(void)
+{
+    IC3CON2bits.SYNCSEL = 0b01110; // Timer 4 Sync Source
+    IC3CON1bits.IC3TSEL = 0b010; // Use Timer 4
+    IC3CON1bits.ICI = 0; // interrupt on every edge
+    IC3CON1bits.ICM = 0b010; // Capture on falling edge
+    IC3CON2bits.ICTRIG = 0; // Synchronizes ICx w/ source designated in SYNCSELx bits
+    
+    IFS2bits.IC3IF = 0; // Clear the IC3 interrupt status flag
+    IEC2bits.IC3IE = 1; // Enable IC3 interrupts
+    IPC9bits.IC3IP = 7; // Set module interrupt priority as 7
+    
+    IC_count = IC3BUF; // clear the buffer
+    IC_count = IC3BUF;
+    IC_count = IC3BUF;
+    IC_count = IC3BUF;
+}
