@@ -66,7 +66,7 @@ float game_time = 0;        // Elapsed Game Time (in seconds)
 int max_speed = 40;         // constant for minimum value of track_speed
 int turret_min = 200;      // Turret minimum angle (absolute min is 500)
 int turret_mid = 700;      // Turret midpoint angle in timer counts (NEEDS ADJUSTMENT!!!)
-int turret_max = 1300;      // Turret maximum angle (absolute is 1000)
+int turret_max = 1275;      // Turret maximum angle (absolute is 1000)
 float collector_pause = 0.5;// Wait time between ball collection cycles (NEEDS ADJUSTMENT!!!!)
 int collector_angle = 500;  // Turret Servo motor displacement during ball collection (NEEDS ADJUSTMENT!!!)
 int cannon_min = 700;      // Cannon Servo minimum angle (Absolute Min is 250))
@@ -76,8 +76,8 @@ float cannon_pause = 0.5;   // Wait time between cannon servo position changes (
 float beam_DIST = 0.0761;   // Distance from corner to IR Collector Trigger Beam
 float F2L_DIST = 0.17;      // Distance from F_IR sensor to L_IR sensor axis (in meters) (ADJUST ME!!!)
 float L2F_DIST = 0.05;      // Distance from L_IR sensor to F_IF sensor axis (in meters) (ADJUST ME!!!)
-float max_tracking_step = 50; // Maximum Angular step (in timer counts) which the turret takes while tracking (ADJUST ME!!!)
-float tracking_delay = 0.5;
+float max_tracking_step = 15; // Maximum Angular step (in timer counts) which the turret takes while tracking (ADJUST ME!!!)
+float tracking_delay = 0.1;
 float IR_adjustment = 0;    // ADJUST ME!!! How much greater if R_IR than L_IR?
 int T_IR_min = 1400;        // Minimum value of Turret IR sensor to fire a ball (ADJUST ME!!!)
 
@@ -134,6 +134,17 @@ int main()
     {
         switch(state)
         {
+            // test drive state
+            case 0:
+                L_dir = 1;      // Forward
+                track_speed = 0;
+                R_dir = 1;      // Forward
+                turret_tracking = 1;
+                turret_angle = turret_min + 169.3*L_range;
+                cannon_angle = cannon_max;
+                cannon_motors = 0;
+                break;
+                
             // State 1: Initializing
             case 1:
                 config_IO();
@@ -144,11 +155,11 @@ int main()
                 R_dir = 1;      // Forward
                 track_speed = 3125;
 
-                state = 7;      // GO TO TESTING STATE
+                state = 0;      // GO TO TESTING STATE
                 
                 break;
                 
-            //State 2: Traveling to Center   
+            //State 2: Traveling to Center
             case 2:
                 switch(destination)
                 {
@@ -417,20 +428,7 @@ int main()
                         }
                         break;
                 }
-                break;
-            
-            // test drive state
-            case 7:
-                end_of_round = 25;
-                L_dir = 1;      // Forward
-                track_speed = max_speed;
-                R_dir = 1;      // Forward
-                turret_tracking = 0;
-                turret_angle = turret_mid;
-                cannon_angle = cannon_max;
-                cannon_motors = 0;
-                break;
-                
+                break;                
         }
         
         // Handle Range Finders and Game Timer
