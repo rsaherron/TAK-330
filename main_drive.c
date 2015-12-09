@@ -63,7 +63,7 @@ int RF_trigger_state = 0;   // used in RF Interrupt Service Routine
 float game_time = 0;        // Elapsed Game Time (in seconds)
 
 // Adjustable Parameters
-int max_speed = 200;         // constant for minimum value of track_speed
+int max_speed = 40;         // constant for minimum value of track_speed
 int turret_min = 200;      // Turret minimum angle (absolute min is 500)
 int turret_mid = 700;      // Turret midpoint angle in timer counts (NEEDS ADJUSTMENT!!!)
 int turret_max = 1300;      // Turret maximum angle (absolute is 1000)
@@ -76,8 +76,8 @@ float cannon_pause = 0.5;   // Wait time between cannon servo position changes (
 float beam_DIST = 0.0761;   // Distance from corner to IR Collector Trigger Beam
 float F2L_DIST = 0.17;      // Distance from F_IR sensor to L_IR sensor axis (in meters) (ADJUST ME!!!)
 float L2F_DIST = 0.05;      // Distance from L_IR sensor to F_IF sensor axis (in meters) (ADJUST ME!!!)
-float max_tracking_step = 0.001; // Maximum Angular step (in timer counts) which the turret takes while tracking (ADJUST ME!!!)
-float tracking_delay = 0.1;
+float max_tracking_step = 50; // Maximum Angular step (in timer counts) which the turret takes while tracking (ADJUST ME!!!)
+float tracking_delay = 0.5;
 float IR_adjustment = 0;    // ADJUST ME!!! How much greater if R_IR than L_IR?
 int T_IR_min = 1400;        // Minimum value of Turret IR sensor to fire a ball (ADJUST ME!!!)
 
@@ -127,7 +127,8 @@ int main()
     int cannon_motors = 0;    // Are the shooting motors spinning (1-Yes/0-No)
     int shooting_state = 0;     // Sub state of the shooting balls state
     int switch_count = 0;       // number of times since the turret went active that the turret has switched directions
-    float last_cannon_time;     // Last game_time that the turret fired
+    float last_cannon_time = 0;     // Last game_time that the turret fired
+    float last_tracking_time = 0;
     
     while(game_time < end_of_round)
     {
@@ -425,8 +426,8 @@ int main()
                 track_speed = max_speed;
                 R_dir = 1;      // Forward
                 turret_tracking = 0;
-                turret_angle = turret_min;
-                cannon_angle = cannon_min;
+                turret_angle = turret_mid;
+                cannon_angle = cannon_max;
                 cannon_motors = 0;
                 break;
                 
@@ -487,22 +488,27 @@ int main()
             new_T_IR = ADC1BUF10;                   // Pin 17: AN10 (Analog Input) <-- Input from Left Base IR Sensor
             T_IR = (last_T_IR + new_T_IR)/2.0;      // Slight Digital Average Filtering
 
-            // Adjust the tracking direction of the turret
-            if(last_T_IR > T_IR)        // Invert Tracking direction if signal is becoming weaker
+            if(game_time >= last_tracking_time + tracking_delay)
             {
-                tracking_step *= -1;
-                switch_count =+ 1;
+                // Adjust the tracking direction of the turret
+//                if(last_T_IR > T_IR)        // Invert Tracking direction if signal is becoming weaker
+//                {
+//                    tracking_step *= -1;
+//                    switch_count =+ 1;
+//                }
+                if(turret_angle >= turret_max)       // don't turn out of the range of motion of the turret
+                {
+                    tracking_step = -1 * max_tracking_step;
+                }
+                if(turret_angle <= turret_min)       // don't turn out of the range of motion of the turret
+                {
+                    tracking_step = max_tracking_step;
+                }
+                turret_angle += tracking_step;
+                last_tracking_time = game_time;
             }
-            if(turret_angle > turret_max)       // don't turn out of the range of motion of the turret
-            {
-                tracking_step = -1 * max_tracking_step;
-            }
-            if(turret_angle < turret_min)       // don't turn out of the range of motion of the turret
-            {
-                tracking_step = max_tracking_step;
-            }
-            turret_angle += tracking_step;
             last_T_IR = new_L_IR;       // Set the new_T_IR reading to the last_IR readings for the next loop
+
         }
         
         // Set Angles of Servo Motors
