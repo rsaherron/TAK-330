@@ -65,11 +65,13 @@ int RF_trigger_state = 0;   // used in RF Interrupt Service Routine
 float game_time = 0.0;        // Elapsed Game Time (in seconds)
 int IC_count = 0;
 float F_range = 0.0;
+float last_F_range = 0;
 int range_count = 0;
-float count2range = 3.342e-4;   // convert 2 microsecond counts to meters
+float count2range = 0.001494;   // convert 2 microsecond counts to meters
+int step_count = 0;
 
 // Adjustable Parameters
-int max_speed = 40;         // constant for minimum value of track_speed
+int max_speed = 100;         // constant for minimum value of track_speed
 int turret_min = 200;      // Turret minimum angle (absolute min is 500)
 int turret_mid = 700;      // Turret midpoint angle in timer counts (NEEDS ADJUSTMENT!!!)
 int turret_max = 1275;      // Turret maximum angle (absolute is 1000)
@@ -80,12 +82,13 @@ int cannon_mid = 900;      // Cannon Servo Turret midpoint angle in timer counts
 int cannon_max = 1100;      // Cannon Servo maximum angle (absolute max is 1200)
 float cannon_pause = 0.5;   // Wait time between cannon servo position changes (Adjust Me)
 float beam_DIST = 0.0761;   // Distance from corner to IR Collector Trigger Beam
-float F2L_DIST = 0.17;      // Distance from F_IR sensor to L_IR sensor axis (in meters) (ADJUST ME!!!)
+float F2L_DIST = 0.0;      // Distance from F_IR sensor to L_IR sensor axis (in meters) (ADJUST ME!!!)
 float L2F_DIST = 0.05;      // Distance from L_IR sensor to F_IF sensor axis (in meters) (ADJUST ME!!!)
 float max_tracking_step = 15; // Maximum Angular step (in timer counts) which the turret takes while tracking (ADJUST ME!!!)
 float tracking_delay = 0.1;
 float IR_adjustment = 0;    // ADJUST ME!!! How much greater if R_IR than L_IR?
 int T_IR_min = 1400;        // Minimum value of Turret IR sensor to fire a ball (ADJUST ME!!!)
+float A = 0.6;
 
 
 int main()
@@ -112,7 +115,6 @@ int main()
     int new_L_echo_state = _RB13;   // read state of RB13
     int F_count = 0;        // count on TMR5
     int L_count = 0;        // count on TMR5
-    int last_F_range = 0;   // pervious reading of new_F_range
     int last_L_range = 0;   // pervious reading of new_L_range
     int new_F_range = 0;    // new reading from front analog range finder
     int new_L_range = 0;    // new reading from lateral analog range finder
@@ -133,6 +135,7 @@ int main()
     int switch_count = 0;       // number of times since the turret went active that the turret has switched directions
     float last_cannon_time = 0;     // Last game_time that the turret fired
     float last_tracking_time = 0;
+    int dir_switch = 0;
     
     while(game_time < end_of_round)
     {
@@ -141,9 +144,9 @@ int main()
             // test drive state
             case 0:
                 L_dir = 1;      // Forward
-                track_speed = 0;
+                track_speed = max_speed;
                 R_dir = 1;      // Forward
-                turret_tracking = 1;
+                turret_tracking = 0;
                 turret_angle = turret_min + 169.3*L_range;
                 cannon_angle = cannon_max;
                 cannon_motors = 0;
@@ -157,10 +160,10 @@ int main()
                 config_PWM();
                 destination = 1;// Center
                 L_dir = 1;      // Forward
-                R_dir = 1;      // Forward
-                track_speed = 3125;
+                R_dir = 0;      // Forward
+                track_speed = max_speed;
 
-                state = 0;      // GO TO TESTING STATE
+                state = 2;      // GO TO TESTING STATE
                 
                 break;
                 
@@ -172,99 +175,68 @@ int main()
                     case 1:
                         switch(center_travel_state)
                         {
-                            // State 0: orienting perpendicular to nearest walls
+                            // State 0: orienting perpendicular to a wall
                             case 0:
-                                if(F_range > 0.6 || L_range > 0.6)
+                                if(dir_switch >= 5)
                                 {
-                                    R_dir = 0;
-                                    L_dir = 1;
-                                    track_speed = max_speed;
+                                    center_travel_state = 1;
+                                    dir_switch = 0;                                   
                                 }
-                                else if(F_range <= 0.6 && L_range <= 0.6)
+                                else if( F_range > last_F_range)
                                 {
-                                    track_speed = max_speed * 2;
-                                    if(abs(last_F_range - F_range) < range_DIFF)
-                                    {
-                                        center_travel_state = 1;
-                                        track_speed = 0;
-                                    }
-                                    else if (last_F_range < F_range)
-                                    {
-                                        L_dir = ~L_dir;
-                                        R_dir = ~R_dir;
-                                    }
+                                    L_dir = !L_dir;
+                                    R_dir = !R_dir;
+                                    dir_switch += 1;
                                 }
+                                
                                 break;
                                 
-                            // State 1: drive forward or backward until adjusted F_RF == adjusted L_RF
+                            // State 1: drive forward or backward until F_range = 0.6 m
                             case 1:
-                                if(abs(F_range - L_range) < range_DIFF) // adjust these for center of rotation!!!
+                                if (abs(F_range - A) < range_DIFF)
                                 {
                                     center_travel_state = 2;
-                                    track_speed = max_speed*2;
-                                    L_dir = 1;
-                                    R_dir = 0;
+                                    step_count = 0;
                                 }
-                                else if(F_range > L_range)      // adjust these for center of rotation!!!
+                                if (F_range > A)
                                 {
                                     L_dir = 1;
                                     R_dir = 1;
-                                    track_speed = max_speed*2;
                                 }
                                 else
                                 {
                                     L_dir = 0;
                                     R_dir = 0;
-                                    track_speed = max_speed*2;
                                 }
                                 break;
                                 
-                            // State 2: Turn 45 degrees to face corner
+                            // State 2: Turn 90 degrees CW
                             case 2:
-                                if(abs(last_F_range - F_range) < range_DIFF)
+                                L_dir = 1;
+                                R_dir = 0;
+                                if(step_count >= 10)
                                 {
                                     center_travel_state = 3;
-                                    track_speed = max_speed * 2;
-                                    R_dir = 0;
-                                    L_dir = 0;
-                                }
-                                else if (last_F_range < F_range)
-                                {
-                                    R_dir = ~R_dir;
-                                    L_dir = ~L_dir;
                                 }
                                 break;
-                            // State 3: Back up to center of arena
+                            // State 3: Travel forward or backward to center of arena
                             case 3:
-                                if (abs(center2corner - F_range) < range_DIFF)
+                                if (abs(F_range - A) < range_DIFF)
                                 {
-                                    destination = 2;    // Arrived at center of arena
-                                    if(game_time >= end_of_round - 5)   // If in the last 5 seconds, stall here forever
-                                    {
-                                        track_speed = 0;
-                                        L_dir = 1;
-                                        R_dir = 1;
-                                    }
-                                    else
-                                    {
-                                        state = 3;          // Else, Switch Overall State to 'Locating Ball Dispenser'
-                                        track_speed = 0;
-                                        L_dir = 1;
-                                        R_dir = 1;
-                                    }
+                                    center_travel_state = 0;
+                                    state = 3;
                                 }
-                                else if (F_range > center2corner)
+                                if (F_range > A)
                                 {
-                                    track_speed = max_speed;    // Drive forward
                                     L_dir = 1;
                                     R_dir = 1;
                                 }
                                 else
                                 {
-                                    track_speed = max_speed;    // Drive Backward
                                     L_dir = 0;
                                     R_dir = 0;
                                 }
+                                break;
                                 break;
                                 
                         }
@@ -280,6 +252,7 @@ int main()
             
             // State 3: Locating Ball Dispenser
             case 3:
+                cannon_motors = 1;
                 if(game_time + 5 >= end_of_round)   // Abort Ball collection and drive to center if in the last 5 seconds of the game
                 {
                     state = 1;
@@ -605,6 +578,10 @@ void config_PWM(void)
     T2CONbits.TCKPS = 0b11;     //Select prescale value of 256:1 - Tick Period of 64 microseconds
     PR2 = 2;                    //Set initial timer period to 128 microseconds
     TMR2 = 0;                   //Set timer count to 0
+    // Configure Timer2 interrupt 
+    _T2IP = 4;                  // Select interrupt priority 
+    _T2IE = 1;                  // Enable interrupt 
+    _T2IF = 0;                  // Clear interrupt flag 
     // Configure Timer 3 --> PWM signal to Cannon Feed Servo Motor
     T3CONbits.TON = 1;          //enable Timer3
     T3CONbits.TCS = 0;          //Set source to internal clock
@@ -676,6 +653,12 @@ void config_IO(void)
     _ANSB4 = 1;
     _ANSB14 = 1;
     _ANSB15 = 1;
+}
+
+void __attribute__((interrupt, no_auto_psv)) _T2Interrupt(void)
+{
+    _T2IF = 0;      // Clear interrupt flag
+    step_count =+ 1;
 }
 
 void __attribute__((interrupt, no_auto_psv)) _T4Interrupt(void)
@@ -766,6 +749,7 @@ void __attribute__ ((__interrupt__)) _IC3Interrupt(void)
     if(range_count >= 5)
     {
         IC_ave = (C1 + C2 + C3 + C4 + C5)/5.0;
+        last_F_range = F_range;
         F_range = IC_ave * count2range + F2L_DIST;
         range_count = 0;
     }
