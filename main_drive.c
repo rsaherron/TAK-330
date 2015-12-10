@@ -53,13 +53,18 @@ _FICD(ICS_PGx2);
 // This function configures the A/D to read from two channels in auto
 // conversion mode.
 //------------------------------------------------------------------------
+
+// global functions
 void config_ad(void);
 void config_PWM(void);
 void config_IO(void);
+void _ISR _T2Interrupt(void);
 void _ISR _T4Interrupt(void);
 void _ISR _T5Interrupt(void);
 void __attribute__ ((__interrupt__)) _IC3Interrupt(void);
 void config_IC(void);
+
+// global variables
 int RF_state = 0;
 int RF_trigger_state = 0;   // used in RF Interrupt Service Routine
 float game_time = 0.0;        // Elapsed Game Time (in seconds)
@@ -69,9 +74,18 @@ float last_F_range = 0;
 int range_count = 0;
 float count2range = 0.001494;   // convert 2 microsecond counts to meters
 int step_count = 0;
+int F_range_flag = 0;
+int state = 1;          // Main State of the robot
+int collecting_state = 0;   // Sub state for the Ball Collecting routine
+int center_travel_state = 0;    // Sub-state for Center destination of Traveling State
+float L_IR = 0;         // average of new and last left IR readings
+float R_IR = 0;         // average of new and last right IR readings
+float T_IR = 0;         // average of new and last turret IR readings
 
-// Adjustable Parameters
-int max_speed = 100;         // constant for minimum value of track_speed
+
+
+// Adjustable Global Parameters
+int max_speed = 50;         // constant for minimum value of track_speed
 int turret_min = 200;      // Turret minimum angle (absolute min is 500)
 int turret_mid = 700;      // Turret midpoint angle in timer counts (NEEDS ADJUSTMENT!!!)
 int turret_max = 1275;      // Turret maximum angle (absolute is 1000)
@@ -80,35 +94,32 @@ int collector_angle = 500;  // Turret Servo motor displacement during ball colle
 int cannon_min = 700;      // Cannon Servo minimum angle (Absolute Min is 250))
 int cannon_mid = 900;      // Cannon Servo Turret midpoint angle in timer counts (NEEDS ADJUSTMENT!!!)
 int cannon_max = 1100;      // Cannon Servo maximum angle (absolute max is 1200)
-float cannon_pause = 0.5;   // Wait time between cannon servo position changes (Adjust Me)
+float cannon_pause = 0.3;   // Wait time between cannon servo position changes (Adjust Me)
 float beam_DIST = 0.0761;   // Distance from corner to IR Collector Trigger Beam
 float F2L_DIST = 0.0;      // Distance from F_IR sensor to L_IR sensor axis (in meters) (ADJUST ME!!!)
 float L2F_DIST = 0.05;      // Distance from L_IR sensor to F_IF sensor axis (in meters) (ADJUST ME!!!)
 float max_tracking_step = 15; // Maximum Angular step (in timer counts) which the turret takes while tracking (ADJUST ME!!!)
 float tracking_delay = 0.1;
 float IR_adjustment = 0;    // ADJUST ME!!! How much greater if R_IR than L_IR?
-int T_IR_min = 1400;        // Minimum value of Turret IR sensor to fire a ball (ADJUST ME!!!)
-float A = 0.6;
+int T_IR_min = 1900;        // Minimum value of Turret IR sensor to fire a ball (ADJUST ME!!!)
+int IR_LOW = 1900;      // min (ambient) analog IR reading
+int IR_DIFF = 30;       // minimum difference between Left_IR and Right_IR
+float A = 0.48;
 
 
 int main()
 {
-    int state = 1;          // Main State of the robot
+    // main function variables
 	int destination = 1;    // sub-state for traveling state
     int L_dir = 1;          // Left track direction (1=forward, 0=backward)
     int R_dir = 0;          // Right track direction (1=forward, 0=backward)
-    int track_speed = 40;    // PWM period of STEP pulses to track pololu boards
-    int IR_LOW = 1500;      // min (ambient) analog IR reading
-    int IR_DIFF = 15;       // minimum difference between Left_IR and Right_IR
+    int track_speed = max_speed;    // PWM period of STEP pulses to track pololu boards
     int last_L_IR = ADC1BUF10;  // pervious reading of new_L_IR
     int last_R_IR = ADC1BUF9;   // pervious reading of new_R_IR
     int last_T_IR = ADC1BUF15;  // previous reading from turret analog IR sensor
     int new_L_IR = ADC1BUF10;   // new reading from left analog IR sensor on base
     int new_R_IR = ADC1BUF9;    // new reading from right analog IR sensor on base
     int new_T_IR = ADC1BUF15;   // new reading from turret analog IR sensor
-    float L_IR = 0;         // average of new and last left IR readings
-    float R_IR = 0;         // average of new and last right IR readings
-    float T_IR = 0;         // average of new and last turret IR readings
     int last_F_echo_state = _RB12;      // last value of Front RF echo input
     int last_L_echo_state = _RB13;      // last value of Lateral  RF echo input
     int new_F_echo_state = _RB12;   // read state of RB12
@@ -119,12 +130,10 @@ int main()
     int new_F_range = 0;    // new reading from front analog range finder
     int new_L_range = 0;    // new reading from lateral analog range finder
     float L_range = 1000;      // average of new and last IR readings
-    float range_DIFF = 0.003;   // uncertainty in rangefinder
+    float range_DIFF = 0.001;   // uncertainty in rangefinder
     float center2corner = 0.6*0.707;    // distance from the center to the corner of the arena
-    int center_travel_state = 0;    // Sub-state for Center destination of Traveling State
     int ball_count = 0;     // number of balls currently in hopper
     float end_of_round = 105;   // Time (on game timer at which the round ends
-    int collecting_state = 0;   // Sub state for the Ball Collecting routine
     float last_game_time = 0;   // beginning of ball collector timer
     float turret_angle = turret_max-100;  // angle (in timer counts) of the turret servo motor
     int cannon_angle = cannon_mid;  // angle (in timer counts) of the cannon loading servo motor
@@ -144,12 +153,14 @@ int main()
             // test drive state
             case 0:
                 L_dir = 1;      // Forward
-                track_speed = max_speed;
-                R_dir = 1;      // Forward
+                track_speed = 0;
+                R_dir = 0;      // Forward
                 turret_tracking = 0;
-                turret_angle = turret_min + 169.3*L_range;
                 cannon_angle = cannon_max;
                 cannon_motors = 0;
+                state = 5;
+                ball_count = 1000;
+                shooting_state = 2;
                 break;
                 
             // State 1: Initializing
@@ -158,17 +169,20 @@ int main()
                 config_ad();
                 config_IC();
                 config_PWM();
-                destination = 1;// Center
+                destination = 1;
                 L_dir = 1;      // Forward
-                R_dir = 0;      // Forward
+                R_dir = 0;      // Backward
                 track_speed = max_speed;
+                turret_angle = turret_mid;
+                cannon_angle = cannon_min;
 
-                state = 2;      // GO TO TESTING STATE
+                state = 2;
                 
                 break;
                 
             //State 2: Traveling to Center
             case 2:
+                turret_angle= turret_mid;
                 switch(destination)
                 {
                     // Destination 1: Center from Random Location
@@ -177,23 +191,28 @@ int main()
                         {
                             // State 0: orienting perpendicular to a wall
                             case 0:
-                                if(dir_switch >= 5)
+                                if(dir_switch == 7)
+                                {
+                                    track_speed = max_speed*2.5;
+                                }
+                                if(dir_switch >= 10)
                                 {
                                     center_travel_state = 1;
                                     dir_switch = 0;                                   
                                 }
-                                else if( F_range > last_F_range)
+                                else if( F_range_flag == 1 && F_range > (last_F_range*1.0001))
                                 {
+                                    F_range_flag = 0;
                                     L_dir = !L_dir;
                                     R_dir = !R_dir;
                                     dir_switch += 1;
+                                    track_speed = max_speed;
                                 }
-                                
                                 break;
                                 
                             // State 1: drive forward or backward until F_range = 0.6 m
                             case 1:
-                                if (abs(F_range - A) < range_DIFF)
+                                if((F_range - A < range_DIFF) && (A - F_range < range_DIFF))
                                 {
                                     center_travel_state = 2;
                                     step_count = 0;
@@ -214,14 +233,14 @@ int main()
                             case 2:
                                 L_dir = 1;
                                 R_dir = 0;
-                                if(step_count >= 10)
+                                if(step_count >= 670)
                                 {
                                     center_travel_state = 3;
                                 }
                                 break;
                             // State 3: Travel forward or backward to center of arena
                             case 3:
-                                if (abs(F_range - A) < range_DIFF)
+                                if((F_range - A < range_DIFF) && (A - F_range < range_DIFF))
                                 {
                                     center_travel_state = 0;
                                     state = 3;
@@ -252,7 +271,8 @@ int main()
             
             // State 3: Locating Ball Dispenser
             case 3:
-                cannon_motors = 1;
+                cannon_motors = 0;
+                turret_angle = turret_mid;
                 if(game_time + 5 >= end_of_round)   // Abort Ball collection and drive to center if in the last 5 seconds of the game
                 {
                     state = 1;
@@ -285,12 +305,14 @@ int main()
                     L_dir = 0;
                     R_dir = 1;
                 }
-                else if (L_IR > IR_LOW && R_IR > IR_LOW && abs(L_IR - R_IR) < IR_DIFF ) // stop rotating when L_IR ~= R_IR > 0
+                else if (L_IR > IR_LOW && R_IR > IR_LOW && L_IR - R_IR < IR_DIFF && R_IR - L_IR < IR_DIFF) // stop rotating when L_IR ~= R_IR > 0
                 {
                     track_speed = 0;
                     L_dir = 1;
                     R_dir = 1;
                     state = 4;      // Start Collecting Balls
+                    collecting_state = 0;
+                    step_count = 0;
                 }
                 
                 break;
@@ -310,16 +332,17 @@ int main()
                     case 0:
                         turret_angle = turret_mid;
                         turret_tracking = 0;
-                        if(F_range <= 0.25*center2corner) // (NEEDS ADJUSTMENT!!!)
-                        {
-                            collecting_state = 1;
-                            break;
-                        }
-                        else
+                        
+                        if(ball_count <= 0 && step_count <= 600) 
                         {
                             track_speed = max_speed;
                             L_dir = 1;
                             R_dir = 1;
+                        }
+                        else
+                        {
+                            collecting_state = 1;
+                            track_speed = 0;
                         }
                         break;
                     // case 1: pivot the turret to get another ball
@@ -344,7 +367,7 @@ int main()
             
             // State 5: Shooting Balls    
             case 5:
-                turret_tracking = 1;
+                turret_tracking = 0;
                 cannon_motors = 1;
                 
                 if(ball_count <= 0)     // Stop if out of balls!
@@ -358,10 +381,11 @@ int main()
 
                 switch(shooting_state)
                 {
+                    cannon_motors = 1;
                     // Shooting State 0: Initialize and drive to center
                     case 0:
                         switch_count = 0;
-                        if(abs(F_range - center2corner) < range_DIFF)
+                        if(F_range - center2corner < range_DIFF && center2corner - F_range < range_DIFF)
                         {
                             track_speed = 0;
                             L_dir = 1;
@@ -494,7 +518,7 @@ int main()
         // Set speed of stepper motors
         PR2 = track_speed;
         OC2RS = PR2;
-        OC2R = PR2/2.0;
+        OC2R = PR2/2;
 
         // Set direction of stepper motors
         if(L_dir == 1)
@@ -658,7 +682,7 @@ void config_IO(void)
 void __attribute__((interrupt, no_auto_psv)) _T2Interrupt(void)
 {
     _T2IF = 0;      // Clear interrupt flag
-    step_count =+ 1;
+    step_count += 1;
 }
 
 void __attribute__((interrupt, no_auto_psv)) _T4Interrupt(void)
@@ -714,7 +738,7 @@ void __attribute__((interrupt, no_auto_psv)) _T5Interrupt(void)
         // State 3: time to raise Lateral RF_trigger   
         case 3:
             PR5 = 5;        // 10 microsecond pulse
-            _LATB8 = 1;
+            _LATB7 = 1;     // Trigger Front Rangefinder
             RF_trigger_state = 4;
             TMR5 = 0;
             break;
@@ -722,7 +746,7 @@ void __attribute__((interrupt, no_auto_psv)) _T5Interrupt(void)
         // State 4: time to drop Lateral RF_trigger and listen for Lateral RF echo
         case 4:
             PR5 = 50000;
-            _LATB8 = 0;
+            _LATB7 = 0;     // Stop Front Rangefinder trigger
             RF_trigger_state = 5;
             TMR5 = 0;
             break;
@@ -734,8 +758,8 @@ void __attribute__((interrupt, no_auto_psv)) _T5Interrupt(void)
     }
 }
 
-void __attribute__ ((__interrupt__)) _IC3Interrupt(void)
-// Front US Rangefinder
+void __attribute__ ((interrupt, no_auto_psv)) _IC3Interrupt(void)
+// Front Rangefinder
 {
     int C1 = 0; int C2 = 0; int C3 = 0; int C4 = 0; int C5 = 0; float IC_ave = 0;
     IFS2bits.IC3IF = 0; // Reset respective interrupt flag
@@ -746,13 +770,22 @@ void __attribute__ ((__interrupt__)) _IC3Interrupt(void)
     C2 = C1;
     C1 = IC_count;
     range_count += 1;
-    if(range_count >= 5)
+    
+    if(range_count < 10)
     {
-        IC_ave = (C1 + C2 + C3 + C4 + C5)/5.0;
-        last_F_range = F_range;
-        F_range = IC_ave * count2range + F2L_DIST;
-        range_count = 0;
+       
     }
+    else
+    {
+       IC_ave = (C1 + C2 + C3 + C4 + C5)/5.0;
+       last_F_range = F_range;
+       F_range = IC_ave * count2range + F2L_DIST;
+       
+       
+       F_range_flag = 1;
+    }
+    
+    
 }
 
 void config_IC(void)
